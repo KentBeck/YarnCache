@@ -6,8 +6,11 @@ mod types;
 mod storage;
 mod server;
 mod api;
+mod transaction_log;
 #[cfg(test)]
 mod api_test;
+#[cfg(test)]
+mod recovery_test;
 
 pub use server::Server;
 pub use types::{NodeId, ArcId, TypeId, Timestamp, Node, Arc as GraphArc};

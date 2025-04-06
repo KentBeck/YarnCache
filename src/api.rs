@@ -86,7 +86,7 @@ impl YarnCacheApi {
         };
 
         // Store the updated node
-        self.server.storage().store_node(&updated_node)?;
+        self.server.storage().update_node(&updated_node)?;
 
         Ok(updated_node)
     }
@@ -103,5 +103,13 @@ impl YarnCacheApi {
     pub async fn obj_delete(&self, id: u64) -> Result<bool> {
         let node_id = NodeId(id);
         self.server.storage().delete_node(node_id)
+    }
+
+    /// Recover the database from the transaction log
+    ///
+    /// This method replays the transaction log to recover the database state
+    /// after a crash or unexpected shutdown.
+    pub async fn recover(&self) -> Result<()> {
+        self.server.storage().recover()
     }
 }

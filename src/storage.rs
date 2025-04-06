@@ -10,6 +10,7 @@ use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 use crc32fast::Hasher;
 
 use crate::{Result, Error, Node, NodeId};
+use crate::transaction_log::{TransactionLog, Operation};
 
 /// Default page size (4KB)
 pub const DEFAULT_PAGE_SIZE: usize = 4096;
@@ -271,30 +272,43 @@ pub struct StorageManager {
     cache: RwLock<lru::LruCache<u32, StdArc<RwLock<Page>>>>,
     /// Total number of pages in the file
     total_pages: RwLock<u32>,
+    /// Transaction log
+    transaction_log: Option<StdArc<TransactionLog>>,
+    /// Whether to write to the transaction log
+    write_to_log: RwLock<bool>,
 }
 
 impl StorageManager {
     /// Create a new storage manager
     pub fn new<P: AsRef<Path>>(path: P, page_size: usize, cache_size: NonZeroUsize) -> Result<Self> {
-        let path = StdArc::from(path.as_ref().to_owned());
+        let path_buf = path.as_ref().to_owned();
+        let path_arc: StdArc<Path> = StdArc::from(path_buf);
 
         // Open or create the file
         let file = OpenOptions::new()
             .read(true)
             .write(true)
             .create(true)
-            .open(&*path)?;
+            .open(&*path_arc)?;
 
         // Get the file size and calculate the number of pages
         let file_size = file.metadata()?.len();
         let total_pages = (file_size as usize / page_size) as u32;
 
+        // Create the transaction log path by appending .log to the database path
+        let log_path = path.as_ref().with_extension("log");
+
+        // Create the transaction log
+        let transaction_log = TransactionLog::new(log_path)?;
+
         Ok(Self {
-            path,
+            path: path_arc,
             file: Mutex::new(file),
             page_size,
             cache: RwLock::new(lru::LruCache::new(cache_size)),
             total_pages: RwLock::new(total_pages),
+            transaction_log: Some(StdArc::new(transaction_log)),
+            write_to_log: RwLock::new(true),
         })
     }
 
@@ -430,6 +444,13 @@ impl StorageManager {
 
     /// Store a node in the database
     pub fn store_node(&self, node: &Node) -> Result<()> {
+        // Write to the transaction log if enabled
+        if *self.write_to_log.read() {
+            if let Some(log) = &self.transaction_log {
+                log.append(Operation::AddNode(node.clone()))?;
+            }
+        }
+
         // For testing, just store in the thread-local map
         Self::NODE_STORE.with(|store| {
             store.borrow_mut().insert(node.id.0, node.clone());
@@ -448,8 +469,32 @@ impl StorageManager {
         Ok(node)
     }
 
+    /// Update a node in the database
+    pub fn update_node(&self, node: &Node) -> Result<()> {
+        // Write to the transaction log if enabled
+        if *self.write_to_log.read() {
+            if let Some(log) = &self.transaction_log {
+                log.append(Operation::UpdateNode(node.clone()))?;
+            }
+        }
+
+        // For testing, just update in the thread-local map
+        Self::NODE_STORE.with(|store| {
+            store.borrow_mut().insert(node.id.0, node.clone());
+        });
+
+        Ok(())
+    }
+
     /// Delete a node from the database
     pub fn delete_node(&self, node_id: NodeId) -> Result<bool> {
+        // Write to the transaction log if enabled
+        if *self.write_to_log.read() {
+            if let Some(log) = &self.transaction_log {
+                log.append(Operation::DeleteNode(node_id))?;
+            }
+        }
+
         // For testing, just remove from the thread-local map
         let removed = Self::NODE_STORE.with(|store| {
             store.borrow_mut().remove(&node_id.0).is_some()
@@ -482,6 +527,77 @@ impl StorageManager {
         // For now, we'll use a simple mapping where node ID = page number
         // In a real implementation, we would remove from a proper index
         Ok(())
+    }
+
+    /// Recover the database from the transaction log
+    pub fn recover(&self) -> Result<()> {
+        // Disable writing to the transaction log during recovery
+        let _write_guard = WriteGuard::new(self);
+
+        // Clear the in-memory store
+        Self::NODE_STORE.with(|store| {
+            store.borrow_mut().clear();
+        });
+
+        // Replay the transaction log
+        if let Some(log) = &self.transaction_log {
+            let mut iter = log.iter()?;
+
+            while let Some(entry) = iter.next()? {
+                match entry.operation {
+                    Operation::AddNode(node) => {
+                        // Store the node
+                        Self::NODE_STORE.with(|store| {
+                            store.borrow_mut().insert(node.id.0, node.clone());
+                        });
+                    }
+                    Operation::UpdateNode(node) => {
+                        // Update the node
+                        Self::NODE_STORE.with(|store| {
+                            store.borrow_mut().insert(node.id.0, node.clone());
+                        });
+                    }
+                    Operation::DeleteNode(node_id) => {
+                        // Delete the node
+                        Self::NODE_STORE.with(|store| {
+                            store.borrow_mut().remove(&node_id.0);
+                        });
+                    }
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Disable writing to the transaction log
+    pub fn disable_logging(&self) {
+        *self.write_to_log.write() = false;
+    }
+
+    /// Enable writing to the transaction log
+    pub fn enable_logging(&self) {
+        *self.write_to_log.write() = true;
+    }
+}
+
+/// Guard for temporarily disabling transaction log writes
+struct WriteGuard<'a> {
+    storage: &'a StorageManager,
+    previous: bool,
+}
+
+impl<'a> WriteGuard<'a> {
+    fn new(storage: &'a StorageManager) -> Self {
+        let previous = *storage.write_to_log.read();
+        *storage.write_to_log.write() = false;
+        Self { storage, previous }
+    }
+}
+
+impl<'a> Drop for WriteGuard<'a> {
+    fn drop(&mut self) {
+        *self.storage.write_to_log.write() = self.previous;
     }
 }
 
