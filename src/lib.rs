@@ -5,9 +5,13 @@ use thiserror::Error;
 mod types;
 mod storage;
 mod server;
+mod api;
+#[cfg(test)]
+mod api_test;
 
 pub use server::Server;
 pub use types::{NodeId, ArcId, TypeId, Timestamp, Node, Arc as GraphArc};
+pub use api::YarnCacheApi;
 
 /// Error types for the YarnCache database
 #[derive(Error, Debug)]
@@ -26,6 +30,9 @@ pub enum Error {
 
     #[error("Task join error: {0}")]
     Join(#[from] tokio::task::JoinError),
+
+    #[error("Not found: {0}")]
+    NotFound(String),
 }
 
 pub type Result<T> = std::result::Result<T, Error>;

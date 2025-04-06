@@ -47,6 +47,7 @@ struct ServerState {
 }
 
 /// YarnCache database server
+#[derive(Clone)]
 pub struct Server {
     /// Server configuration
     config: ServerConfig,
@@ -129,6 +130,11 @@ impl Server {
     /// Get a reference to the storage manager
     pub fn storage(&self) -> StdArc<StorageManager> {
         self.state.storage.clone()
+    }
+
+    /// Create a new API instance for this server
+    pub fn api(&self) -> crate::YarnCacheApi {
+        crate::YarnCacheApi::new(StdArc::new(self.clone()))
     }
 }
 
