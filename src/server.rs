@@ -2,13 +2,13 @@
 
 use std::num::NonZeroUsize;
 use std::path::PathBuf;
-use std::sync::Arc as StdArc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc as StdArc;
 use tokio::sync::{oneshot, Mutex as TokioMutex};
 use tokio::task::JoinHandle;
 
-use crate::Result;
 use crate::storage::{StorageManager, DEFAULT_PAGE_SIZE};
+use crate::Result;
 
 /// Default cache size (number of pages)
 const DEFAULT_CACHE_SIZE: usize = 1000;
@@ -22,6 +22,8 @@ pub struct ServerConfig {
     pub page_size: usize,
     /// Cache size (number of pages)
     pub cache_size: NonZeroUsize,
+    /// Maximum disk space in bytes (None for unlimited)
+    pub max_disk_space: Option<u64>,
 }
 
 impl Default for ServerConfig {
@@ -30,6 +32,7 @@ impl Default for ServerConfig {
             db_path: PathBuf::from("yarn_cache.db"),
             page_size: DEFAULT_PAGE_SIZE,
             cache_size: NonZeroUsize::new(DEFAULT_CACHE_SIZE).unwrap(),
+            max_disk_space: None, // Unlimited by default
         }
     }
 }
@@ -66,6 +69,7 @@ impl Server {
             &config.db_path,
             config.page_size,
             config.cache_size,
+            config.max_disk_space,
         )?);
 
         // Create the shutdown channel
@@ -81,9 +85,7 @@ impl Server {
 
         // Create the server task
         let task_state = state.clone();
-        let task_handle = tokio::spawn(async move {
-            Self::run(task_state, shutdown_rx).await
-        });
+        let task_handle = tokio::spawn(async move { Self::run(task_state, shutdown_rx).await });
 
         // Store the task handle
         *(state.task_handle.lock().await) = Some(task_handle);
@@ -151,6 +153,7 @@ mod tests {
             db_path,
             page_size: DEFAULT_PAGE_SIZE,
             cache_size: NonZeroUsize::new(10).unwrap(),
+            max_disk_space: None, // Unlimited for tests
         };
 
         // Create a server

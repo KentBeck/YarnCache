@@ -7,9 +7,9 @@ mod tests {
     use temp_dir::TempDir;
     use tokio::runtime::Runtime;
 
-    use crate::{Server, YarnCacheApi};
     use crate::server::ServerConfig;
     use crate::storage::DEFAULT_PAGE_SIZE;
+    use crate::{Server, YarnCacheApi};
 
     #[test]
     fn test_object_operations() {
@@ -24,6 +24,7 @@ mod tests {
                 db_path,
                 page_size: DEFAULT_PAGE_SIZE,
                 cache_size: NonZeroUsize::new(10).unwrap(),
+                max_disk_space: None, // Unlimited for tests
             };
             let server = Server::with_config(config).await.unwrap();
             let server_arc = Arc::new(server);

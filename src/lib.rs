@@ -2,27 +2,29 @@
 
 use thiserror::Error;
 
-mod types;
-mod storage;
-mod server;
 mod api;
-mod transaction_log;
-mod reference;
 #[cfg(test)]
 mod api_test;
 #[cfg(test)]
-mod recovery_test;
+mod disk_space_test;
 #[cfg(test)]
-mod transaction_log_test;
+mod persistence_test;
+#[cfg(test)]
+mod recovery_test;
+mod reference;
+mod server;
+mod storage;
+mod transaction_log;
 #[cfg(test)]
 mod transaction_log_sequence_test;
 #[cfg(test)]
-mod persistence_test;
+mod transaction_log_test;
+mod types;
 
-pub use server::Server;
-pub use types::{NodeId, ArcId, TypeId, Timestamp, Node, Arc as GraphArc};
 pub use api::YarnCacheApi;
 pub use reference::ReferenceServer;
+pub use server::Server;
+pub use types::{Arc as GraphArc, ArcId, Node, NodeId, Timestamp, TypeId};
 
 /// Error types for the YarnCache database
 #[derive(Error, Debug)]
@@ -44,6 +46,9 @@ pub enum Error {
 
     #[error("Not found: {0}")]
     NotFound(String),
+
+    #[error("Disk space exceeded: {0}")]
+    DiskSpaceExceeded(String),
 }
 
 pub type Result<T> = std::result::Result<T, Error>;

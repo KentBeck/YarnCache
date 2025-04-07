@@ -5,8 +5,8 @@
 
 use std::sync::Arc as StdArc;
 
-use crate::{Result, Error, NodeId, TypeId, Node, GraphArc, ArcId, Timestamp};
 use crate::server::Server;
+use crate::{ArcId, Error, GraphArc, Node, NodeId, Result, Timestamp, TypeId};
 
 /// API for the YarnCache database
 pub struct YarnCacheApi {
@@ -128,7 +128,14 @@ impl YarnCacheApi {
     /// # Returns
     ///
     /// The created association
-    pub async fn assoc_add(&self, id1: u64, atype: u64, id2: u64, time: u64, data: Vec<u8>) -> Result<GraphArc> {
+    pub async fn assoc_add(
+        &self,
+        id1: u64,
+        atype: u64,
+        id2: u64,
+        time: u64,
+        data: Vec<u8>,
+    ) -> Result<GraphArc> {
         let from_node = NodeId(id1);
         let to_node = NodeId(id2);
         let type_id = TypeId(atype);
@@ -180,7 +187,13 @@ impl YarnCacheApi {
     /// # Returns
     ///
     /// The updated association
-    pub async fn assoc_update(&self, id1: u64, atype: u64, id2: u64, data: Vec<u8>) -> Result<GraphArc> {
+    pub async fn assoc_update(
+        &self,
+        id1: u64,
+        atype: u64,
+        id2: u64,
+        data: Vec<u8>,
+    ) -> Result<GraphArc> {
         let arc_id = ArcId(id1 ^ id2 ^ atype);
 
         // Get the existing arc

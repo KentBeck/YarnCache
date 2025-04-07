@@ -3,13 +3,13 @@
 //! This module provides functionality for recording all operations in a transaction log
 //! and recovering the database state from the log after a crash.
 
+use parking_lot::Mutex;
+use serde::{Deserialize, Serialize};
 use std::fs::{File, OpenOptions};
 use std::io::{self, BufReader, BufWriter, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
-use parking_lot::Mutex;
-use serde::{Serialize, Deserialize};
 
-use crate::{Result, Error, Node, NodeId, GraphArc, ArcId};
+use crate::{ArcId, Error, GraphArc, Node, NodeId, Result};
 
 /// Types of operations that can be recorded in the transaction log
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -166,10 +166,10 @@ impl TransactionLog {
 
         // Verify the checksum
         if calculated_checksum != stored_checksum {
-            return Err(Error::Corruption(
-                format!("Transaction log entry checksum mismatch: {:x} != {:x}",
-                        calculated_checksum, stored_checksum)
-            ));
+            return Err(Error::Corruption(format!(
+                "Transaction log entry checksum mismatch: {:x} != {:x}",
+                calculated_checksum, stored_checksum
+            )));
         }
 
         // Deserialize the entry
@@ -242,9 +242,7 @@ impl TransactionLog {
     /// Iterate over all entries in the log
     pub fn iter(&self) -> Result<LogIterator> {
         // Open the log file for reading
-        let file = OpenOptions::new()
-            .read(true)
-            .open(&self.log_path)?;
+        let file = OpenOptions::new().read(true).open(&self.log_path)?;
 
         Ok(LogIterator {
             reader: BufReader::new(file),

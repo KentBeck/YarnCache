@@ -1,7 +1,7 @@
 //! Core types for the YarnCache database
 
+use serde::{Deserialize, Serialize};
 use std::fmt;
-use serde::{Serialize, Deserialize};
 
 /// A 64-bit UUID used to identify nodes
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -78,10 +78,12 @@ impl Node {
     pub fn new(id: NodeId, type_id: TypeId, data: Vec<u8>) -> Self {
         Self {
             id,
-            timestamp: Timestamp(std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_millis() as u64),
+            timestamp: Timestamp(
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_millis() as u64,
+            ),
             type_id,
             data,
         }
@@ -90,13 +92,21 @@ impl Node {
 
 impl Arc {
     /// Create a new arc
-    pub fn new(id: ArcId, type_id: TypeId, from_node: NodeId, to_node: NodeId, data: Vec<u8>) -> Self {
+    pub fn new(
+        id: ArcId,
+        type_id: TypeId,
+        from_node: NodeId,
+        to_node: NodeId,
+        data: Vec<u8>,
+    ) -> Self {
         Self {
             id,
-            timestamp: Timestamp(std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_millis() as u64),
+            timestamp: Timestamp(
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_millis() as u64,
+            ),
             type_id,
             from_node,
             to_node,

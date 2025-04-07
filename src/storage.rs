@@ -1,16 +1,16 @@
 //! Storage implementation for the YarnCache database
 
+use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
+use crc32fast::Hasher;
+use parking_lot::{Mutex, RwLock};
 use std::fs::{File, OpenOptions};
-use std::io::{self, Read, Write, Seek, SeekFrom};
+use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::num::NonZeroUsize;
 use std::path::Path;
 use std::sync::Arc as StdArc;
-use parking_lot::{RwLock, Mutex};
-use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
-use crc32fast::Hasher;
 
-use crate::{Result, Error, Node, NodeId, GraphArc, ArcId};
-use crate::transaction_log::{TransactionLog, Operation};
+use crate::transaction_log::{Operation, TransactionLog};
+use crate::{ArcId, Error, GraphArc, Node, NodeId, Result};
 
 /// Default page size (4KB)
 pub const DEFAULT_PAGE_SIZE: usize = 4096;
@@ -217,8 +217,7 @@ impl Page {
         buffer[..PAGE_HEADER_SIZE].copy_from_slice(&header_bytes);
 
         // Write the data
-        buffer[PAGE_HEADER_SIZE..PAGE_HEADER_SIZE + self.data.len()]
-            .copy_from_slice(&self.data);
+        buffer[PAGE_HEADER_SIZE..PAGE_HEADER_SIZE + self.data.len()].copy_from_slice(&self.data);
 
         Ok(())
     }
@@ -226,9 +225,11 @@ impl Page {
     /// Deserialize the page from bytes
     pub fn from_bytes(buffer: &[u8], page_size: usize) -> Result<Self> {
         if buffer.len() < page_size {
-            return Err(Error::Corruption(
-                format!("Buffer too small for page: {} < {}", buffer.len(), page_size)
-            ));
+            return Err(Error::Corruption(format!(
+                "Buffer too small for page: {} < {}",
+                buffer.len(),
+                page_size
+            )));
         }
 
         // Read the header
@@ -237,9 +238,10 @@ impl Page {
 
         // Verify the magic number
         if header.magic != PAGE_MAGIC {
-            return Err(Error::Corruption(
-                format!("Invalid page magic: {:x} != {:x}", header.magic, PAGE_MAGIC)
-            ));
+            return Err(Error::Corruption(format!(
+                "Invalid page magic: {:x} != {:x}",
+                header.magic, PAGE_MAGIC
+            )));
         }
 
         // Read the data
@@ -251,9 +253,10 @@ impl Page {
 
         // Verify the checksum
         if !page.verify_checksum() {
-            return Err(Error::Corruption(
-                format!("Page checksum verification failed for page {}", header.page_number)
-            ));
+            return Err(Error::Corruption(format!(
+                "Page checksum verification failed for page {}",
+                header.page_number
+            )));
         }
 
         Ok(page)
@@ -274,11 +277,20 @@ pub struct StorageManager {
     transaction_log: Option<StdArc<TransactionLog>>,
     /// Whether to write to the transaction log
     write_to_log: RwLock<bool>,
+    /// Maximum disk space in bytes (None for unlimited)
+    max_disk_space: Option<u64>,
+    /// Current disk usage in bytes
+    current_disk_usage: RwLock<u64>,
 }
 
 impl StorageManager {
     /// Create a new storage manager
-    pub fn new<P: AsRef<Path>>(path: P, page_size: usize, cache_size: NonZeroUsize) -> Result<Self> {
+    pub fn new<P: AsRef<Path>>(
+        path: P,
+        page_size: usize,
+        cache_size: NonZeroUsize,
+        max_disk_space: Option<u64>,
+    ) -> Result<Self> {
         // Open or create the file
         let file = OpenOptions::new()
             .read(true)
@@ -294,7 +306,22 @@ impl StorageManager {
         let log_path = path.as_ref().with_extension("log");
 
         // Create the transaction log
-        let transaction_log = TransactionLog::new(log_path)?;
+        let transaction_log = TransactionLog::new(&log_path)?;
+
+        // Calculate current disk usage
+        let file_size = file.metadata()?.len();
+        let log_file_size = std::fs::metadata(&log_path)?.len();
+        let current_disk_usage = file_size + log_file_size;
+
+        // Check if we're already over the limit
+        if let Some(max_space) = max_disk_space {
+            if current_disk_usage > max_space {
+                return Err(Error::DiskSpaceExceeded(format!(
+                    "Current disk usage ({} bytes) exceeds maximum allowed ({} bytes)",
+                    current_disk_usage, max_space
+                )));
+            }
+        }
 
         Ok(Self {
             file: Mutex::new(file),
@@ -303,6 +330,8 @@ impl StorageManager {
             total_pages: RwLock::new(total_pages),
             transaction_log: Some(StdArc::new(transaction_log)),
             write_to_log: RwLock::new(true),
+            max_disk_space,
+            current_disk_usage: RwLock::new(current_disk_usage),
         })
     }
 
@@ -337,8 +366,7 @@ impl StorageManager {
 
         // Serialize the page
         let mut buffer = vec![0; self.page_size];
-        page.to_bytes(&mut buffer)
-            .map_err(|e| Error::Io(e))?;
+        page.to_bytes(&mut buffer).map_err(|e| Error::Io(e))?;
 
         // Write the page
         file.write_all(&buffer)?;
@@ -414,7 +442,8 @@ impl StorageManager {
         let page_numbers: Vec<u32> = {
             // Use a separate scope for the read lock
             let cache_guard = self.cache.read();
-            cache_guard.iter()
+            cache_guard
+                .iter()
                 .map(|(page_number, _)| *page_number)
                 .collect()
         };
@@ -440,10 +469,16 @@ impl StorageManager {
 
     /// Store a node in the database
     pub fn store_node(&self, node: &Node) -> Result<()> {
+        // Check disk space limit before writing
+        self.check_disk_space_limit(node.data.len() as u64)?;
+
         // Write to the transaction log if enabled
         if *self.write_to_log.read() {
             if let Some(log) = &self.transaction_log {
                 log.append(Operation::AddNode(node.clone()))?;
+
+                // Update disk usage
+                self.update_disk_usage(node.data.len() as u64);
             }
         }
 
@@ -458,19 +493,23 @@ impl StorageManager {
     /// Get a node from the database
     pub fn get_node(&self, node_id: NodeId) -> Result<Option<Node>> {
         // For testing, just retrieve from the thread-local map
-        let node = Self::NODE_STORE.with(|store| {
-            store.borrow().get(&node_id.0).cloned()
-        });
+        let node = Self::NODE_STORE.with(|store| store.borrow().get(&node_id.0).cloned());
 
         Ok(node)
     }
 
     /// Update a node in the database
     pub fn update_node(&self, node: &Node) -> Result<()> {
+        // Check disk space limit before writing
+        self.check_disk_space_limit(node.data.len() as u64)?;
+
         // Write to the transaction log if enabled
         if *self.write_to_log.read() {
             if let Some(log) = &self.transaction_log {
                 log.append(Operation::UpdateNode(node.clone()))?;
+
+                // Update disk usage
+                self.update_disk_usage(node.data.len() as u64);
             }
         }
 
@@ -484,17 +523,22 @@ impl StorageManager {
 
     /// Delete a node from the database
     pub fn delete_node(&self, node_id: NodeId) -> Result<bool> {
+        // Check disk space limit for the log entry (small fixed size)
+        self.check_disk_space_limit(16)?; // Approximate size of a delete operation in the log
+
         // Write to the transaction log if enabled
         if *self.write_to_log.read() {
             if let Some(log) = &self.transaction_log {
                 log.append(Operation::DeleteNode(node_id))?;
+
+                // Update disk usage
+                self.update_disk_usage(16); // Approximate size of a delete operation in the log
             }
         }
 
         // For testing, just remove from the thread-local map
-        let removed = Self::NODE_STORE.with(|store| {
-            store.borrow_mut().remove(&node_id.0).is_some()
-        });
+        let removed =
+            Self::NODE_STORE.with(|store| store.borrow_mut().remove(&node_id.0).is_some());
 
         Ok(removed)
     }
@@ -502,12 +546,41 @@ impl StorageManager {
     // Note: In a real implementation, we would have helper methods for node indexing
     // For the current in-memory implementation, these are not needed
 
+    /// Check if the operation would exceed the disk space limit
+    fn check_disk_space_limit(&self, additional_bytes: u64) -> Result<()> {
+        if let Some(max_space) = self.max_disk_space {
+            let current_usage = *self.current_disk_usage.read();
+            let new_usage = current_usage + additional_bytes;
+
+            if new_usage > max_space {
+                return Err(Error::DiskSpaceExceeded(format!(
+                    "Operation would exceed disk space limit: current usage {} bytes + {} bytes > {} bytes maximum",
+                    current_usage, additional_bytes, max_space
+                )));
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Update the current disk usage
+    fn update_disk_usage(&self, additional_bytes: u64) {
+        let mut usage = self.current_disk_usage.write();
+        *usage += additional_bytes;
+    }
+
     /// Store an arc in the database
     pub fn store_arc(&self, arc: &GraphArc) -> Result<()> {
+        // Check disk space limit before writing
+        self.check_disk_space_limit(arc.data.len() as u64)?;
+
         // Write to the transaction log if enabled
         if *self.write_to_log.read() {
             if let Some(log) = &self.transaction_log {
                 log.append(Operation::AddArc(arc.clone()))?;
+
+                // Update disk usage
+                self.update_disk_usage(arc.data.len() as u64);
             }
         }
 
@@ -522,19 +595,23 @@ impl StorageManager {
     /// Get an arc from the database
     pub fn get_arc(&self, arc_id: ArcId) -> Result<Option<GraphArc>> {
         // For testing, just retrieve from the thread-local map
-        let arc = Self::ARC_STORE.with(|store| {
-            store.borrow().get(&arc_id.0).cloned()
-        });
+        let arc = Self::ARC_STORE.with(|store| store.borrow().get(&arc_id.0).cloned());
 
         Ok(arc)
     }
 
     /// Update an arc in the database
     pub fn update_arc(&self, arc: &GraphArc) -> Result<()> {
+        // Check disk space limit before writing
+        self.check_disk_space_limit(arc.data.len() as u64)?;
+
         // Write to the transaction log if enabled
         if *self.write_to_log.read() {
             if let Some(log) = &self.transaction_log {
                 log.append(Operation::UpdateArc(arc.clone()))?;
+
+                // Update disk usage
+                self.update_disk_usage(arc.data.len() as u64);
             }
         }
 
@@ -548,17 +625,21 @@ impl StorageManager {
 
     /// Delete an arc from the database
     pub fn delete_arc(&self, arc_id: ArcId) -> Result<bool> {
+        // Check disk space limit for the log entry (small fixed size)
+        self.check_disk_space_limit(16)?; // Approximate size of a delete operation in the log
+
         // Write to the transaction log if enabled
         if *self.write_to_log.read() {
             if let Some(log) = &self.transaction_log {
                 log.append(Operation::DeleteArc(arc_id))?;
+
+                // Update disk usage
+                self.update_disk_usage(16); // Approximate size of a delete operation in the log
             }
         }
 
         // For testing, just remove from the thread-local map
-        let removed = Self::ARC_STORE.with(|store| {
-            store.borrow_mut().remove(&arc_id.0).is_some()
-        });
+        let removed = Self::ARC_STORE.with(|store| store.borrow_mut().remove(&arc_id.0).is_some());
 
         Ok(removed)
     }
@@ -704,7 +785,9 @@ mod tests {
         let db_path = temp_dir.path().join("test.db");
 
         // Create a storage manager
-        let storage = StorageManager::new(&db_path, DEFAULT_PAGE_SIZE, NonZeroUsize::new(10).unwrap()).unwrap();
+        let storage =
+            StorageManager::new(&db_path, DEFAULT_PAGE_SIZE, NonZeroUsize::new(10).unwrap(), None)
+                .unwrap();
 
         // Allocate a page
         let page = storage.allocate_page(PageType::Node).unwrap();
@@ -750,7 +833,9 @@ mod tests {
         }
 
         // Create a storage manager
-        let storage = StorageManager::new(&db_path, DEFAULT_PAGE_SIZE, NonZeroUsize::new(10).unwrap()).unwrap();
+        let storage =
+            StorageManager::new(&db_path, DEFAULT_PAGE_SIZE, NonZeroUsize::new(10).unwrap(), None)
+                .unwrap();
 
         // Try to read the page, should fail with corruption error
         let result = storage.read_page_from_disk(0);

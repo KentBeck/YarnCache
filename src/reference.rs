@@ -3,10 +3,10 @@
 //! This module provides an in-memory reference implementation of the YarnCache API
 //! for testing and specification purposes.
 
-use std::collections::{HashMap, BTreeMap};
+use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, Mutex};
 
-use crate::{Result, Error, Node, NodeId, TypeId, GraphArc, ArcId, Timestamp};
+use crate::{ArcId, Error, GraphArc, Node, NodeId, Result, Timestamp, TypeId};
 
 /// In-memory reference implementation of the YarnCache API
 pub struct ReferenceServer {
@@ -84,14 +84,27 @@ impl ReferenceServer {
     }
 
     /// Create an association
-    pub fn assoc_add(&self, id1: u64, atype: u64, id2: u64, time: u64, data: Vec<u8>) -> Result<GraphArc> {
+    pub fn assoc_add(
+        &self,
+        id1: u64,
+        atype: u64,
+        id2: u64,
+        time: u64,
+        data: Vec<u8>,
+    ) -> Result<GraphArc> {
         // Check if both nodes exist
         let nodes = self.nodes.lock().unwrap();
         if !nodes.contains_key(&id1) {
-            return Err(Error::NotFound(format!("Source node with ID {} not found", id1)));
+            return Err(Error::NotFound(format!(
+                "Source node with ID {} not found",
+                id1
+            )));
         }
         if !nodes.contains_key(&id2) {
-            return Err(Error::NotFound(format!("Target node with ID {} not found", id2)));
+            return Err(Error::NotFound(format!(
+                "Target node with ID {} not found",
+                id2
+            )));
         }
         drop(nodes);
 
@@ -117,13 +130,22 @@ impl ReferenceServer {
 
         // Update indices
         let mut arcs_by_source = self.arcs_by_source.lock().unwrap();
-        arcs_by_source.entry((id1, atype)).or_insert_with(Vec::new).push(arc_id.0);
+        arcs_by_source
+            .entry((id1, atype))
+            .or_insert_with(Vec::new)
+            .push(arc_id.0);
 
         let mut arcs_by_target = self.arcs_by_target.lock().unwrap();
-        arcs_by_target.entry((id2, atype)).or_insert_with(Vec::new).push(arc_id.0);
+        arcs_by_target
+            .entry((id2, atype))
+            .or_insert_with(Vec::new)
+            .push(arc_id.0);
 
         let mut arcs_by_time = self.arcs_by_time.lock().unwrap();
-        arcs_by_time.entry(time).or_insert_with(Vec::new).push(arc_id.0);
+        arcs_by_time
+            .entry(time)
+            .or_insert_with(Vec::new)
+            .push(arc_id.0);
 
         Ok(arc)
     }
@@ -198,7 +220,14 @@ impl ReferenceServer {
     }
 
     /// Get associations in a range
-    pub fn assoc_get_range(&self, id1: u64, atype: u64, id2_lbound: u64, id2_ubound: u64, limit: usize) -> Result<Vec<GraphArc>> {
+    pub fn assoc_get_range(
+        &self,
+        id1: u64,
+        atype: u64,
+        id2_lbound: u64,
+        id2_ubound: u64,
+        limit: usize,
+    ) -> Result<Vec<GraphArc>> {
         let mut result = Vec::new();
 
         // Get all arcs for this source and type
@@ -229,7 +258,13 @@ impl ReferenceServer {
     }
 
     /// Count associations in a range
-    pub fn assoc_count_range(&self, id1: u64, atype: u64, id2_lbound: u64, id2_ubound: u64) -> Result<usize> {
+    pub fn assoc_count_range(
+        &self,
+        id1: u64,
+        atype: u64,
+        id2_lbound: u64,
+        id2_ubound: u64,
+    ) -> Result<usize> {
         let mut count = 0;
 
         // Get all arcs for this source and type
@@ -257,7 +292,14 @@ impl ReferenceServer {
     }
 
     /// Get associations in a time range
-    pub fn assoc_time_range(&self, id1: u64, atype: u64, time_lbound: u64, time_ubound: u64, limit: usize) -> Result<Vec<GraphArc>> {
+    pub fn assoc_time_range(
+        &self,
+        id1: u64,
+        atype: u64,
+        time_lbound: u64,
+        time_ubound: u64,
+        limit: usize,
+    ) -> Result<Vec<GraphArc>> {
         let mut result = Vec::new();
 
         // Get all arcs for this source and type
@@ -302,7 +344,12 @@ impl ReferenceServer {
     }
 
     /// Get multiple associations
-    pub fn assoc_get_multi(&self, id1s: Vec<u64>, atype: u64, id2s: Vec<u64>) -> Result<Vec<GraphArc>> {
+    pub fn assoc_get_multi(
+        &self,
+        id1s: Vec<u64>,
+        atype: u64,
+        id2s: Vec<u64>,
+    ) -> Result<Vec<GraphArc>> {
         let mut result = Vec::new();
         let arcs = self.arcs.lock().unwrap();
 
@@ -335,7 +382,14 @@ impl ReferenceServer {
     }
 
     /// Get inverse associations
-    pub fn assoc_get_inverse(&self, id2: u64, atype: u64, id1_lbound: u64, id1_ubound: u64, limit: usize) -> Result<Vec<GraphArc>> {
+    pub fn assoc_get_inverse(
+        &self,
+        id2: u64,
+        atype: u64,
+        id1_lbound: u64,
+        id1_ubound: u64,
+        limit: usize,
+    ) -> Result<Vec<GraphArc>> {
         let mut result = Vec::new();
 
         // Get all arcs
@@ -358,14 +412,20 @@ impl ReferenceServer {
     }
 
     /// Get objects connected via two association types
-    pub fn assoc_get_both(&self, id1: u64, atype1: u64, atype2: u64) -> Result<Vec<(u64, Vec<GraphArc>)>> {
+    pub fn assoc_get_both(
+        &self,
+        id1: u64,
+        atype1: u64,
+        atype2: u64,
+    ) -> Result<Vec<(u64, Vec<GraphArc>)>> {
         let mut result = Vec::new();
 
         // Get all arcs
         let arcs = self.arcs.lock().unwrap();
 
         // Find all arcs from id1 with type atype1
-        let first_level_arcs: Vec<_> = arcs.values()
+        let first_level_arcs: Vec<_> = arcs
+            .values()
             .filter(|arc| arc.from_node.0 == id1 && arc.type_id.0 == atype1)
             .cloned()
             .collect();
@@ -375,7 +435,8 @@ impl ReferenceServer {
             let intermediate_id = arc1.to_node.0;
 
             // Find all arcs from the intermediate node with type atype2
-            let second_level_arcs: Vec<_> = arcs.values()
+            let second_level_arcs: Vec<_> = arcs
+                .values()
                 .filter(|arc| arc.from_node.0 == intermediate_id && arc.type_id.0 == atype2)
                 .cloned()
                 .collect();
@@ -389,14 +450,20 @@ impl ReferenceServer {
     }
 
     /// Count objects connected via two association types
-    pub fn assoc_count_both(&self, id1: u64, atype1: u64, atype2: u64) -> Result<HashMap<u64, usize>> {
+    pub fn assoc_count_both(
+        &self,
+        id1: u64,
+        atype1: u64,
+        atype2: u64,
+    ) -> Result<HashMap<u64, usize>> {
         let mut result = HashMap::new();
 
         // Get all arcs
         let arcs = self.arcs.lock().unwrap();
 
         // Find all arcs from id1 with type atype1
-        let first_level_arcs: Vec<_> = arcs.values()
+        let first_level_arcs: Vec<_> = arcs
+            .values()
             .filter(|arc| arc.from_node.0 == id1 && arc.type_id.0 == atype1)
             .cloned()
             .collect();
@@ -406,7 +473,8 @@ impl ReferenceServer {
             let intermediate_id = arc1.to_node.0;
 
             // Count all arcs from the intermediate node with type atype2
-            let count = arcs.values()
+            let count = arcs
+                .values()
                 .filter(|arc| arc.from_node.0 == intermediate_id && arc.type_id.0 == atype2)
                 .count();
 
@@ -500,7 +568,9 @@ mod tests {
         let atype = 100;
         let time = 12345;
         let data = vec![7, 8, 9];
-        let arc = server.assoc_add(id1, atype, id2, time, data.clone()).unwrap();
+        let arc = server
+            .assoc_add(id1, atype, id2, time, data.clone())
+            .unwrap();
 
         assert_eq!(arc.from_node.0, id1);
         assert_eq!(arc.to_node.0, id2);
@@ -517,7 +587,9 @@ mod tests {
 
         // Test assoc_update
         let new_data = vec![10, 11, 12];
-        let updated_arc = server.assoc_update(id1, atype, id2, new_data.clone()).unwrap();
+        let updated_arc = server
+            .assoc_update(id1, atype, id2, new_data.clone())
+            .unwrap();
         assert_eq!(updated_arc.from_node.0, id1);
         assert_eq!(updated_arc.to_node.0, id2);
         assert_eq!(updated_arc.type_id.0, atype);
@@ -570,37 +642,51 @@ mod tests {
         // Add target nodes and create associations with different timestamps
         for (i, &target_id) in target_ids.iter().enumerate() {
             // Add target node
-            server.obj_add(target_id, node_type, vec![i as u8 + 1]).unwrap();
+            server
+                .obj_add(target_id, node_type, vec![i as u8 + 1])
+                .unwrap();
 
             // Create association with timestamp = target_id * 100
             let time = target_id * 100;
-            server.assoc_add(source_id, arc_type, target_id, time, vec![i as u8]).unwrap();
+            server
+                .assoc_add(source_id, arc_type, target_id, time, vec![i as u8])
+                .unwrap();
         }
 
         // Test assoc_get_range
-        let arcs = server.assoc_get_range(source_id, arc_type, 20, 40, 10).unwrap();
+        let arcs = server
+            .assoc_get_range(source_id, arc_type, 20, 40, 10)
+            .unwrap();
         assert_eq!(arcs.len(), 3);
         assert!(arcs.iter().any(|a| a.to_node.0 == 20));
         assert!(arcs.iter().any(|a| a.to_node.0 == 30));
         assert!(arcs.iter().any(|a| a.to_node.0 == 40));
 
         // Test assoc_get_range with limit
-        let arcs = server.assoc_get_range(source_id, arc_type, 20, 40, 2).unwrap();
+        let arcs = server
+            .assoc_get_range(source_id, arc_type, 20, 40, 2)
+            .unwrap();
         assert_eq!(arcs.len(), 2);
 
         // Test assoc_count_range
-        let count = server.assoc_count_range(source_id, arc_type, 20, 40).unwrap();
+        let count = server
+            .assoc_count_range(source_id, arc_type, 20, 40)
+            .unwrap();
         assert_eq!(count, 3);
 
         // Test assoc_time_range
-        let arcs = server.assoc_time_range(source_id, arc_type, 2000, 4000, 10).unwrap();
+        let arcs = server
+            .assoc_time_range(source_id, arc_type, 2000, 4000, 10)
+            .unwrap();
         assert_eq!(arcs.len(), 3);
         assert!(arcs.iter().any(|a| a.timestamp.0 == 2000));
         assert!(arcs.iter().any(|a| a.timestamp.0 == 3000));
         assert!(arcs.iter().any(|a| a.timestamp.0 == 4000));
 
         // Test assoc_time_range with limit
-        let arcs = server.assoc_time_range(source_id, arc_type, 2000, 4000, 2).unwrap();
+        let arcs = server
+            .assoc_time_range(source_id, arc_type, 2000, 4000, 2)
+            .unwrap();
         assert_eq!(arcs.len(), 2);
 
         // Test with non-existent source
@@ -610,7 +696,9 @@ mod tests {
         let count = server.assoc_count_range(999, arc_type, 0, 100).unwrap();
         assert_eq!(count, 0);
 
-        let arcs = server.assoc_time_range(999, arc_type, 0, 10000, 10).unwrap();
+        let arcs = server
+            .assoc_time_range(999, arc_type, 0, 10000, 10)
+            .unwrap();
         assert_eq!(arcs.len(), 0);
 
         // Test with non-existent arc type
@@ -620,17 +708,25 @@ mod tests {
         let count = server.assoc_count_range(source_id, 999, 0, 100).unwrap();
         assert_eq!(count, 0);
 
-        let arcs = server.assoc_time_range(source_id, 999, 0, 10000, 10).unwrap();
+        let arcs = server
+            .assoc_time_range(source_id, 999, 0, 10000, 10)
+            .unwrap();
         assert_eq!(arcs.len(), 0);
 
         // Test with empty range
-        let arcs = server.assoc_get_range(source_id, arc_type, 60, 70, 10).unwrap();
+        let arcs = server
+            .assoc_get_range(source_id, arc_type, 60, 70, 10)
+            .unwrap();
         assert_eq!(arcs.len(), 0);
 
-        let count = server.assoc_count_range(source_id, arc_type, 60, 70).unwrap();
+        let count = server
+            .assoc_count_range(source_id, arc_type, 60, 70)
+            .unwrap();
         assert_eq!(count, 0);
 
-        let arcs = server.assoc_time_range(source_id, arc_type, 6000, 7000, 10).unwrap();
+        let arcs = server
+            .assoc_time_range(source_id, arc_type, 6000, 7000, 10)
+            .unwrap();
         assert_eq!(arcs.len(), 0);
     }
 
@@ -653,7 +749,9 @@ mod tests {
 
         for &source_id in &source_ids {
             for &target_id in &target_ids {
-                server.assoc_add(source_id, arc_type, target_id, 1000, vec![]).unwrap();
+                server
+                    .assoc_add(source_id, arc_type, target_id, 1000, vec![])
+                    .unwrap();
             }
         }
 
@@ -670,11 +768,15 @@ mod tests {
         assert!(nodes.iter().any(|n| n.id.0 == 1));
 
         // Test assoc_get_multi
-        let arcs = server.assoc_get_multi(vec![1, 2], arc_type, vec![3, 4]).unwrap();
+        let arcs = server
+            .assoc_get_multi(vec![1, 2], arc_type, vec![3, 4])
+            .unwrap();
         assert_eq!(arcs.len(), 4); // 2 sources * 2 targets
 
         // Test assoc_get_multi with non-existent associations
-        let arcs = server.assoc_get_multi(vec![1, 999], arc_type, vec![3, 999]).unwrap();
+        let arcs = server
+            .assoc_get_multi(vec![1, 999], arc_type, vec![3, 999])
+            .unwrap();
         assert_eq!(arcs.len(), 1); // Only (1,3) exists
 
         // Test assoc_count_multi
@@ -742,7 +844,9 @@ mod tests {
         // Check the arcs we found
         assert!(arcs.len() > 0);
         assert!(arcs.iter().all(|a| a.to_node.0 == 12)); // All should point to node 12
-        assert!(arcs.iter().all(|a| a.from_node.0 >= 1 && a.from_node.0 <= 3)); // All should come from nodes 1-3
+        assert!(arcs
+            .iter()
+            .all(|a| a.from_node.0 >= 1 && a.from_node.0 <= 3)); // All should come from nodes 1-3
 
         // Test assoc_get_inverse with limit
         let arcs = server.assoc_get_inverse(12, arc_type1, 1, 5, 2).unwrap();
