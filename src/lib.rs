@@ -6,6 +6,8 @@ mod api;
 #[cfg(test)]
 mod api_test;
 #[cfg(test)]
+mod arc_persistence_test;
+#[cfg(test)]
 mod disk_space_test;
 #[cfg(test)]
 mod persistence_test;
