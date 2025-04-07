@@ -14,17 +14,11 @@ use crate::{Result, Error, Node, NodeId, GraphArc, ArcId};
 /// Types of operations that can be recorded in the transaction log
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Operation {
-    /// Add a node
     AddNode(Node),
-    /// Update a node
     UpdateNode(Node),
-    /// Delete a node
     DeleteNode(NodeId),
-    /// Add an arc
     AddArc(GraphArc),
-    /// Update an arc
     UpdateArc(GraphArc),
-    /// Delete an arc
     DeleteArc(ArcId),
 }
 

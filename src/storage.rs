@@ -584,37 +584,31 @@ impl StorageManager {
             while let Some(entry) = iter.next()? {
                 match entry.operation {
                     Operation::AddNode(node) => {
-                        // Store the node
                         Self::NODE_STORE.with(|store| {
                             store.borrow_mut().insert(node.id.0, node.clone());
                         });
                     }
                     Operation::UpdateNode(node) => {
-                        // Update the node
                         Self::NODE_STORE.with(|store| {
                             store.borrow_mut().insert(node.id.0, node.clone());
                         });
                     }
                     Operation::DeleteNode(node_id) => {
-                        // Delete the node
                         Self::NODE_STORE.with(|store| {
                             store.borrow_mut().remove(&node_id.0);
                         });
                     }
                     Operation::AddArc(arc) => {
-                        // Store the arc
                         Self::ARC_STORE.with(|store| {
                             store.borrow_mut().insert(arc.id.0, arc.clone());
                         });
                     }
                     Operation::UpdateArc(arc) => {
-                        // Update the arc
                         Self::ARC_STORE.with(|store| {
                             store.borrow_mut().insert(arc.id.0, arc.clone());
                         });
                     }
                     Operation::DeleteArc(arc_id) => {
-                        // Delete the arc
                         Self::ARC_STORE.with(|store| {
                             store.borrow_mut().remove(&arc_id.0);
                         });
