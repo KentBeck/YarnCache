@@ -9,7 +9,7 @@ use parking_lot::{RwLock, Mutex};
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 use crc32fast::Hasher;
 
-use crate::{Result, Error, Node, NodeId};
+use crate::{Result, Error, Node, NodeId, GraphArc, ArcId};
 use crate::transaction_log::{TransactionLog, Operation};
 
 /// Default page size (4KB)
@@ -429,10 +429,12 @@ impl StorageManager {
 
     // Node operations
 
-    // For testing purposes, we'll use a simple in-memory map for nodes
+    // For testing purposes, we'll use simple in-memory maps for nodes and arcs
     // In a real implementation, we would use the page-based storage
     thread_local! {
         static NODE_STORE: std::cell::RefCell<std::collections::HashMap<u64, Node>> =
+            std::cell::RefCell::new(std::collections::HashMap::new());
+        static ARC_STORE: std::cell::RefCell<std::collections::HashMap<u64, GraphArc>> =
             std::cell::RefCell::new(std::collections::HashMap::new());
     }
 
@@ -500,13 +502,44 @@ impl StorageManager {
     // Note: In a real implementation, we would have helper methods for node indexing
     // For the current in-memory implementation, these are not needed
 
+    /// Store an arc in the database
+    pub fn store_arc(&self, arc: &GraphArc) -> Result<()> {
+        // Write to the transaction log if enabled
+        if *self.write_to_log.read() {
+            if let Some(log) = &self.transaction_log {
+                log.append(Operation::AddArc(arc.clone()))?;
+            }
+        }
+
+        // For testing, just store in the thread-local map
+        Self::ARC_STORE.with(|store| {
+            store.borrow_mut().insert(arc.id.0, arc.clone());
+        });
+
+        Ok(())
+    }
+
+    /// Get an arc from the database
+    pub fn get_arc(&self, arc_id: ArcId) -> Result<Option<GraphArc>> {
+        // For testing, just retrieve from the thread-local map
+        let arc = Self::ARC_STORE.with(|store| {
+            store.borrow().get(&arc_id.0).cloned()
+        });
+
+        Ok(arc)
+    }
+
     /// Recover the database from the transaction log
     pub fn recover(&self) -> Result<()> {
         // Disable writing to the transaction log during recovery
         let _write_guard = WriteGuard::new(self);
 
-        // Clear the in-memory store
+        // Clear the in-memory stores
         Self::NODE_STORE.with(|store| {
+            store.borrow_mut().clear();
+        });
+
+        Self::ARC_STORE.with(|store| {
             store.borrow_mut().clear();
         });
 
@@ -532,6 +565,12 @@ impl StorageManager {
                         // Delete the node
                         Self::NODE_STORE.with(|store| {
                             store.borrow_mut().remove(&node_id.0);
+                        });
+                    }
+                    Operation::AddArc(arc) => {
+                        // Store the arc
+                        Self::ARC_STORE.with(|store| {
+                            store.borrow_mut().insert(arc.id.0, arc.clone());
                         });
                     }
                 }

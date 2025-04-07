@@ -128,4 +128,75 @@ mod tests {
             server2.shutdown().await.unwrap();
         });
     }
+
+    #[test]
+    fn test_recovery_of_associations() {
+        let rt = Runtime::new().unwrap();
+        rt.block_on(async {
+            // Create a temporary directory for the database
+            let temp_dir = TempDir::new().unwrap();
+            let db_path = temp_dir.path().join("test_assoc.db");
+
+            // Create a server
+            let config = ServerConfig {
+                db_path: db_path.clone(),
+                page_size: DEFAULT_PAGE_SIZE,
+                cache_size: NonZeroUsize::new(10).unwrap(),
+            };
+
+            // First server instance
+            let server1 = Server::with_config(config.clone()).await.unwrap();
+            let api1 = YarnCacheApi::new(Arc::new(server1.clone()));
+
+            // Create source and target nodes
+            let source_id = 101;
+            let target_id = 202;
+            let node_type = 1;
+            let arc_type = 2;
+
+            // Add the nodes
+            api1.obj_add(source_id, node_type, vec![1, 2, 3]).await.unwrap();
+            api1.obj_add(target_id, node_type, vec![4, 5, 6]).await.unwrap();
+
+            // Create an association
+            let timestamp = 12345;
+            let arc_data = vec![7, 8, 9];
+            let _arc = api1.assoc_add(source_id, arc_type, target_id, timestamp, arc_data.clone()).await.unwrap();
+
+            // Verify the association was created
+            let retrieved_arc = api1.assoc_get(source_id, arc_type, target_id).await.unwrap().unwrap();
+            assert_eq!(retrieved_arc.from_node.0, source_id);
+            assert_eq!(retrieved_arc.to_node.0, target_id);
+            assert_eq!(retrieved_arc.type_id.0, arc_type);
+            assert_eq!(retrieved_arc.data, arc_data);
+
+            // Simulate a crash
+            server1.shutdown().await.unwrap();
+
+            // Create a new server instance
+            let server2 = Server::with_config(config).await.unwrap();
+            let api2 = YarnCacheApi::new(Arc::new(server2.clone()));
+
+            // Recover the database
+            api2.recover().await.unwrap();
+
+            // Verify the nodes were recovered
+            let source_node = api2.obj_get(source_id).await.unwrap().unwrap();
+            assert_eq!(source_node.id.0, source_id);
+
+            let target_node = api2.obj_get(target_id).await.unwrap().unwrap();
+            assert_eq!(target_node.id.0, target_id);
+
+            // Verify the association was recovered
+            let recovered_arc = api2.assoc_get(source_id, arc_type, target_id).await.unwrap().unwrap();
+            assert_eq!(recovered_arc.from_node.0, source_id);
+            assert_eq!(recovered_arc.to_node.0, target_id);
+            assert_eq!(recovered_arc.type_id.0, arc_type);
+            assert_eq!(recovered_arc.timestamp.0, timestamp);
+            assert_eq!(recovered_arc.data, arc_data);
+
+            // Clean up
+            server2.shutdown().await.unwrap();
+        });
+    }
 }

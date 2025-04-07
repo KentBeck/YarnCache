@@ -5,7 +5,7 @@
 
 use std::sync::Arc as StdArc;
 
-use crate::{Result, Error, NodeId, TypeId, Node};
+use crate::{Result, Error, NodeId, TypeId, Node, GraphArc, ArcId, Timestamp};
 use crate::server::Server;
 
 /// API for the YarnCache database
@@ -111,5 +111,60 @@ impl YarnCacheApi {
     /// after a crash or unexpected shutdown.
     pub async fn recover(&self) -> Result<()> {
         self.server.storage().recover()
+    }
+
+    // Association Operations
+
+    /// Create an association
+    ///
+    /// # Arguments
+    ///
+    /// * `id1` - The ID of the source object
+    /// * `atype` - The type of the association
+    /// * `id2` - The ID of the target object
+    /// * `time` - The timestamp of the association
+    /// * `data` - The data associated with the association
+    ///
+    /// # Returns
+    ///
+    /// The created association
+    pub async fn assoc_add(&self, id1: u64, atype: u64, id2: u64, time: u64, data: Vec<u8>) -> Result<GraphArc> {
+        let from_node = NodeId(id1);
+        let to_node = NodeId(id2);
+        let type_id = TypeId(atype);
+        let timestamp = Timestamp(time);
+
+        // Create a simple hash for the arc ID
+        let arc_id = ArcId(id1 ^ id2 ^ atype);
+
+        let arc = GraphArc {
+            id: arc_id,
+            timestamp,
+            type_id,
+            from_node,
+            to_node,
+            data,
+        };
+
+        // Store the arc
+        self.server.storage().store_arc(&arc)?;
+
+        Ok(arc)
+    }
+
+    /// Get a specific association
+    ///
+    /// # Arguments
+    ///
+    /// * `id1` - The ID of the source object
+    /// * `atype` - The type of the association
+    /// * `id2` - The ID of the target object
+    ///
+    /// # Returns
+    ///
+    /// The association, if found
+    pub async fn assoc_get(&self, id1: u64, atype: u64, id2: u64) -> Result<Option<GraphArc>> {
+        let arc_id = ArcId(id1 ^ id2 ^ atype);
+        self.server.storage().get_arc(arc_id)
     }
 }
