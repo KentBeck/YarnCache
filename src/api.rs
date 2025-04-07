@@ -167,4 +167,57 @@ impl YarnCacheApi {
         let arc_id = ArcId(id1 ^ id2 ^ atype);
         self.server.storage().get_arc(arc_id)
     }
+
+    /// Update an association's data
+    ///
+    /// # Arguments
+    ///
+    /// * `id1` - The ID of the source object
+    /// * `atype` - The type of the association
+    /// * `id2` - The ID of the target object
+    /// * `data` - The new data for the association
+    ///
+    /// # Returns
+    ///
+    /// The updated association
+    pub async fn assoc_update(&self, id1: u64, atype: u64, id2: u64, data: Vec<u8>) -> Result<GraphArc> {
+        let arc_id = ArcId(id1 ^ id2 ^ atype);
+
+        // Get the existing arc
+        let arc = match self.server.storage().get_arc(arc_id)? {
+            Some(arc) => arc,
+            None => return Err(Error::NotFound(format!("Association not found"))),
+        };
+
+        // Create an updated arc with the same IDs and type, but new data
+        let updated_arc = GraphArc {
+            id: arc.id,
+            timestamp: arc.timestamp,
+            type_id: arc.type_id,
+            from_node: arc.from_node,
+            to_node: arc.to_node,
+            data,
+        };
+
+        // Store the updated arc
+        self.server.storage().update_arc(&updated_arc)?;
+
+        Ok(updated_arc)
+    }
+
+    /// Delete an association
+    ///
+    /// # Arguments
+    ///
+    /// * `id1` - The ID of the source object
+    /// * `atype` - The type of the association
+    /// * `id2` - The ID of the target object
+    ///
+    /// # Returns
+    ///
+    /// `true` if the association was deleted, `false` if it didn't exist
+    pub async fn assoc_delete(&self, id1: u64, atype: u64, id2: u64) -> Result<bool> {
+        let arc_id = ArcId(id1 ^ id2 ^ atype);
+        self.server.storage().delete_arc(arc_id)
+    }
 }

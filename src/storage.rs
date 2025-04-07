@@ -529,6 +529,40 @@ impl StorageManager {
         Ok(arc)
     }
 
+    /// Update an arc in the database
+    pub fn update_arc(&self, arc: &GraphArc) -> Result<()> {
+        // Write to the transaction log if enabled
+        if *self.write_to_log.read() {
+            if let Some(log) = &self.transaction_log {
+                log.append(Operation::UpdateArc(arc.clone()))?;
+            }
+        }
+
+        // For testing, just update in the thread-local map
+        Self::ARC_STORE.with(|store| {
+            store.borrow_mut().insert(arc.id.0, arc.clone());
+        });
+
+        Ok(())
+    }
+
+    /// Delete an arc from the database
+    pub fn delete_arc(&self, arc_id: ArcId) -> Result<bool> {
+        // Write to the transaction log if enabled
+        if *self.write_to_log.read() {
+            if let Some(log) = &self.transaction_log {
+                log.append(Operation::DeleteArc(arc_id))?;
+            }
+        }
+
+        // For testing, just remove from the thread-local map
+        let removed = Self::ARC_STORE.with(|store| {
+            store.borrow_mut().remove(&arc_id.0).is_some()
+        });
+
+        Ok(removed)
+    }
+
     /// Recover the database from the transaction log
     pub fn recover(&self) -> Result<()> {
         // Disable writing to the transaction log during recovery
@@ -571,6 +605,18 @@ impl StorageManager {
                         // Store the arc
                         Self::ARC_STORE.with(|store| {
                             store.borrow_mut().insert(arc.id.0, arc.clone());
+                        });
+                    }
+                    Operation::UpdateArc(arc) => {
+                        // Update the arc
+                        Self::ARC_STORE.with(|store| {
+                            store.borrow_mut().insert(arc.id.0, arc.clone());
+                        });
+                    }
+                    Operation::DeleteArc(arc_id) => {
+                        // Delete the arc
+                        Self::ARC_STORE.with(|store| {
+                            store.borrow_mut().remove(&arc_id.0);
                         });
                     }
                 }

@@ -12,6 +12,8 @@ mod reference;
 mod api_test;
 #[cfg(test)]
 mod recovery_test;
+#[cfg(test)]
+mod transaction_log_test;
 
 pub use server::Server;
 pub use types::{NodeId, ArcId, TypeId, Timestamp, Node, Arc as GraphArc};

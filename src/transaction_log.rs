@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use parking_lot::Mutex;
 use serde::{Serialize, Deserialize};
 
-use crate::{Result, Error, Node, NodeId, GraphArc};
+use crate::{Result, Error, Node, NodeId, GraphArc, ArcId};
 
 /// Types of operations that can be recorded in the transaction log
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -22,6 +22,10 @@ pub enum Operation {
     DeleteNode(NodeId),
     /// Add an arc
     AddArc(GraphArc),
+    /// Update an arc
+    UpdateArc(GraphArc),
+    /// Delete an arc
+    DeleteArc(ArcId),
 }
 
 /// A transaction log entry
