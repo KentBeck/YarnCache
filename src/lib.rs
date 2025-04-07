@@ -16,6 +16,8 @@ mod recovery_test;
 mod transaction_log_test;
 #[cfg(test)]
 mod transaction_log_sequence_test;
+#[cfg(test)]
+mod persistence_test;
 
 pub use server::Server;
 pub use types::{NodeId, ArcId, TypeId, Timestamp, Node, Arc as GraphArc};
