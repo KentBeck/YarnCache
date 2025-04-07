@@ -7,6 +7,7 @@ mod storage;
 mod server;
 mod api;
 mod transaction_log;
+mod reference;
 #[cfg(test)]
 mod api_test;
 #[cfg(test)]
@@ -15,6 +16,7 @@ mod recovery_test;
 pub use server::Server;
 pub use types::{NodeId, ArcId, TypeId, Timestamp, Node, Arc as GraphArc};
 pub use api::YarnCacheApi;
+pub use reference::ReferenceServer;
 
 /// Error types for the YarnCache database
 #[derive(Error, Debug)]
