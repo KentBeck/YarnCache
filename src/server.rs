@@ -49,8 +49,6 @@ struct ServerState {
 /// YarnCache database server
 #[derive(Clone)]
 pub struct Server {
-    /// Server configuration
-    config: ServerConfig,
     /// Server state
     state: StdArc<ServerState>,
 }
@@ -90,7 +88,7 @@ impl Server {
         // Store the task handle
         *(state.task_handle.lock().await) = Some(task_handle);
 
-        Ok(Self { config, state })
+        Ok(Self { state })
     }
 
     /// Run the server

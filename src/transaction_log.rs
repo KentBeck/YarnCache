@@ -205,6 +205,10 @@ impl TransactionLog {
     }
 
     /// Truncate the log (remove all entries)
+    ///
+    /// This method is currently not used but is provided for future use
+    /// when implementing log rotation or cleanup.
+    #[allow(dead_code)]
     pub fn truncate(&self) -> Result<()> {
         let file = self.log_file.lock();
 

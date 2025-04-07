@@ -262,8 +262,6 @@ impl Page {
 
 /// Storage manager for the database
 pub struct StorageManager {
-    /// Path to the database file
-    path: StdArc<Path>,
     /// File handle
     file: Mutex<File>,
     /// Page size
@@ -281,15 +279,12 @@ pub struct StorageManager {
 impl StorageManager {
     /// Create a new storage manager
     pub fn new<P: AsRef<Path>>(path: P, page_size: usize, cache_size: NonZeroUsize) -> Result<Self> {
-        let path_buf = path.as_ref().to_owned();
-        let path_arc: StdArc<Path> = StdArc::from(path_buf);
-
         // Open or create the file
         let file = OpenOptions::new()
             .read(true)
             .write(true)
             .create(true)
-            .open(&*path_arc)?;
+            .open(path.as_ref())?;
 
         // Get the file size and calculate the number of pages
         let file_size = file.metadata()?.len();
@@ -302,7 +297,6 @@ impl StorageManager {
         let transaction_log = TransactionLog::new(log_path)?;
 
         Ok(Self {
-            path: path_arc,
             file: Mutex::new(file),
             page_size,
             cache: RwLock::new(lru::LruCache::new(cache_size)),
@@ -503,31 +497,8 @@ impl StorageManager {
         Ok(removed)
     }
 
-    // Helper methods for node index
-
-    /// Get the page number for a node
-    fn get_node_page_number(&self, node_id: NodeId) -> Result<Option<u32>> {
-        // For now, we'll use a simple mapping where node ID = page number
-        // In a real implementation, we would use a proper index
-
-        // For testing purposes, we'll just return the node ID as the page number
-        // This is not a proper implementation but works for our tests
-        Ok(Some(node_id.0 as u32))
-    }
-
-    /// Update the node index
-    fn update_node_index(&self, _node_id: NodeId, _page_number: u32) -> Result<()> {
-        // For now, we'll use a simple mapping where node ID = page number
-        // In a real implementation, we would update a proper index
-        Ok(())
-    }
-
-    /// Remove a node from the index
-    fn remove_from_node_index(&self, _node_id: NodeId) -> Result<()> {
-        // For now, we'll use a simple mapping where node ID = page number
-        // In a real implementation, we would remove from a proper index
-        Ok(())
-    }
+    // Note: In a real implementation, we would have helper methods for node indexing
+    // For the current in-memory implementation, these are not needed
 
     /// Recover the database from the transaction log
     pub fn recover(&self) -> Result<()> {
