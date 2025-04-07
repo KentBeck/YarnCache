@@ -42,12 +42,17 @@ pub struct TransactionLog {
     log_file: Mutex<File>,
     /// Current sequence number
     sequence: Mutex<u64>,
+    /// Path to the sequence file (stores the next sequence number)
+    sequence_path: PathBuf,
 }
 
 impl TransactionLog {
     /// Create a new transaction log
     pub fn new<P: AsRef<Path>>(path: P) -> Result<Self> {
         let log_path = path.as_ref().to_owned();
+
+        // Create the sequence file path by appending .seq to the log path
+        let sequence_path = log_path.with_extension("log.seq");
 
         // Open or create the transaction log file
         let log_file = OpenOptions::new()
@@ -57,16 +62,55 @@ impl TransactionLog {
             .open(&log_path)?;
 
         // Determine the current sequence number
-        let sequence = Self::determine_sequence(&log_file)?;
+        let sequence = Self::read_sequence(&sequence_path).unwrap_or_else(|_| {
+            // If we can't read the sequence file, fall back to scanning the log
+            let seq = Self::determine_sequence(&log_file).unwrap_or(0);
+            // Write the sequence to the sequence file for next time
+            let _ = Self::write_sequence(&sequence_path, seq);
+            seq
+        });
 
         Ok(Self {
             log_path,
             log_file: Mutex::new(log_file),
             sequence: Mutex::new(sequence),
+            sequence_path,
         })
     }
 
+    /// Read the sequence number from the sequence file
+    fn read_sequence(path: &Path) -> Result<u64> {
+        // Open the sequence file
+        let mut file = File::open(path)?;
+
+        // Read the sequence number
+        let mut buf = [0u8; 8];
+        file.read_exact(&mut buf)?;
+
+        // Convert to u64
+        let sequence = u64::from_le_bytes(buf);
+
+        Ok(sequence)
+    }
+
+    /// Write the sequence number to the sequence file
+    fn write_sequence(path: &Path, sequence: u64) -> Result<()> {
+        // Create or truncate the sequence file
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .open(path)?;
+
+        // Write the sequence number
+        file.write_all(&sequence.to_le_bytes())?;
+        file.flush()?;
+
+        Ok(())
+    }
+
     /// Determine the current sequence number by reading the log
+    /// This is a fallback method used when the sequence file doesn't exist
     fn determine_sequence(file: &File) -> Result<u64> {
         let metadata = file.metadata()?;
         if metadata.len() == 0 {
@@ -169,6 +213,10 @@ impl TransactionLog {
             let mut sequence = self.sequence.lock();
             let current = *sequence;
             *sequence += 1;
+
+            // Update the sequence file with the new next sequence number
+            let _ = Self::write_sequence(&self.sequence_path, *sequence);
+
             current
         };
 
@@ -215,7 +263,13 @@ impl TransactionLog {
         file.set_len(0)?;
 
         // Reset the sequence number
-        *self.sequence.lock() = 0;
+        {
+            let mut sequence = self.sequence.lock();
+            *sequence = 0;
+
+            // Update the sequence file
+            let _ = Self::write_sequence(&self.sequence_path, *sequence);
+        }
 
         Ok(())
     }
