@@ -476,6 +476,13 @@ pub struct StorageManager {
     flush_interval_ms: u64,
 }
 
+impl Drop for StorageManager {
+    fn drop(&mut self) {
+        println!("StorageManager being dropped");
+        self.close_file();
+    }
+}
+
 impl StorageManager {
     /// Create a new storage manager
     pub fn new<P: AsRef<Path>>(
@@ -485,6 +492,8 @@ impl StorageManager {
         max_disk_space: Option<u64>,
         flush_interval_ms: u64,
     ) -> Result<Self> {
+        println!("Creating new StorageManager with path: {:?}", path.as_ref());
+
         // Clear the in-memory stores before loading from disk
         Self::NODE_STORE.with(|store| {
             store.borrow_mut().clear();
@@ -493,12 +502,37 @@ impl StorageManager {
         Self::ARC_STORE.with(|store| {
             store.borrow_mut().clear();
         });
-        // Open or create the file
-        let file = OpenOptions::new()
+
+        // Check if the file exists and is locked
+        if path.as_ref().exists() {
+            println!("Database file exists, checking if it's accessible...");
+            match File::open(path.as_ref()) {
+                Ok(_) => println!("Database file is accessible"),
+                Err(e) => {
+                    println!("Error opening database file: {}", e);
+                    return Err(Error::Io(e));
+                }
+            }
+        } else {
+            println!("Database file does not exist, will create a new one");
+        }
+        // Open or create the file with a more robust approach
+        println!("Opening database file...");
+        let file = match OpenOptions::new()
             .read(true)
             .write(true)
             .create(true)
-            .open(path.as_ref())?;
+            .open(path.as_ref())
+        {
+            Ok(f) => {
+                println!("Successfully opened database file");
+                f
+            },
+            Err(e) => {
+                println!("Error opening database file: {}", e);
+                return Err(Error::Io(e));
+            }
+        };
 
         // Get the file size and calculate the number of pages
         let file_size = file.metadata()?.len();
@@ -528,6 +562,8 @@ impl StorageManager {
         // Default flush settings
         const DEFAULT_FLUSH_THRESHOLD: usize = 100; // Flush after 100 dirty pages
 
+        // Create the storage manager with a more robust approach
+        println!("Creating storage manager...");
         let storage_manager = Self {
             file: Mutex::new(file),
             page_size,
@@ -542,6 +578,7 @@ impl StorageManager {
             flush_threshold: DEFAULT_FLUSH_THRESHOLD,
             flush_interval_ms,
         };
+        println!("Storage manager created successfully");
 
         // Start the background flush task
         storage_manager.start_background_flush();
@@ -905,13 +942,53 @@ impl StorageManager {
 
     /// Shutdown the storage manager
     pub fn shutdown(&self) -> Result<()> {
+        println!("Shutting down storage manager");
+
         // Stop the background flush task
         self.flush_running.store(false, Ordering::SeqCst);
+        println!("Background flush task stopped");
 
         // Flush all pages to disk
         self.flush_all()?;
+        println!("All pages flushed to disk");
 
+        // Explicitly close the file by dropping the mutex guard
+        {
+            let mut file_guard = self.file.lock();
+            // Force a flush of the file
+            file_guard.flush()?;
+            println!("File flushed");
+
+            // We can't explicitly close the file in Rust, but we can drop the guard
+            // which will release the lock
+            drop(file_guard);
+            println!("File lock released");
+        }
+
+        println!("Storage manager shutdown complete");
         Ok(())
+    }
+
+    // Implement Drop for StorageManager to ensure proper cleanup
+    fn close_file(&self) {
+        println!("Closing file in StorageManager");
+        // Try to flush all pages to disk
+        if let Err(e) = self.flush_all() {
+            println!("Error flushing pages during close: {}", e);
+        }
+
+        // Try to flush and close the file
+        let file_guard_option = self.file.try_lock();
+        if let Some(mut file_guard) = file_guard_option {
+            if let Err(e) = file_guard.flush() {
+                println!("Error flushing file during close: {}", e);
+            }
+            // Drop the guard to release the lock
+            drop(file_guard);
+            println!("File closed successfully");
+        } else {
+            println!("Could not acquire file lock during close");
+        }
     }
 
     // Node operations
