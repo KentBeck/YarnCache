@@ -10,7 +10,6 @@ use std::num::NonZeroUsize;
 use std::path::Path;
 use std::sync::Arc as StdArc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Duration;
 
 use crate::transaction_log::{Operation, TransactionLog};
 use crate::{ArcId, Error, GraphArc, Node, NodeId, Result};
@@ -290,8 +289,6 @@ pub struct StorageManager {
     flush_running: AtomicBool,
     /// Flush threshold (number of dirty pages that triggers a flush)
     flush_threshold: usize,
-    /// Flush interval in milliseconds
-    flush_interval_ms: u64,
 }
 
 impl StorageManager {
@@ -336,7 +333,6 @@ impl StorageManager {
 
         // Default flush settings
         const DEFAULT_FLUSH_THRESHOLD: usize = 100; // Flush after 100 dirty pages
-        const DEFAULT_FLUSH_INTERVAL_MS: u64 = 1000; // Flush every 1 second
 
         let storage_manager = Self {
             file: Mutex::new(file),
@@ -350,7 +346,6 @@ impl StorageManager {
             dirty_pages: RwLock::new(HashSet::new()),
             flush_running: AtomicBool::new(true),
             flush_threshold: DEFAULT_FLUSH_THRESHOLD,
-            flush_interval_ms: DEFAULT_FLUSH_INTERVAL_MS,
         };
 
         // Start the background flush task
@@ -391,7 +386,7 @@ impl StorageManager {
         // let storage_clone = self.clone();
         // std::thread::spawn(move || {
         //     while storage_clone.flush_running.load(Ordering::SeqCst) {
-        //         std::thread::sleep(Duration::from_millis(storage_clone.flush_interval_ms));
+        //         std::thread::sleep(Duration::from_millis(1000)); // 1 second interval
         //         storage_clone.flush_dirty_pages_if_needed();
         //     }
         // });
