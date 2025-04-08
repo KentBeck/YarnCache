@@ -16,6 +16,8 @@ mod recovery_test;
 mod reference;
 mod server;
 mod storage;
+#[cfg(test)]
+mod stress_test;
 mod transaction_log;
 #[cfg(test)]
 mod transaction_log_sequence_test;
