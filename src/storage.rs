@@ -785,9 +785,13 @@ mod tests {
         let db_path = temp_dir.path().join("test.db");
 
         // Create a storage manager
-        let storage =
-            StorageManager::new(&db_path, DEFAULT_PAGE_SIZE, NonZeroUsize::new(10).unwrap(), None)
-                .unwrap();
+        let storage = StorageManager::new(
+            &db_path,
+            DEFAULT_PAGE_SIZE,
+            NonZeroUsize::new(10).unwrap(),
+            None,
+        )
+        .unwrap();
 
         // Allocate a page
         let page = storage.allocate_page(PageType::Node).unwrap();
@@ -833,9 +837,13 @@ mod tests {
         }
 
         // Create a storage manager
-        let storage =
-            StorageManager::new(&db_path, DEFAULT_PAGE_SIZE, NonZeroUsize::new(10).unwrap(), None)
-                .unwrap();
+        let storage = StorageManager::new(
+            &db_path,
+            DEFAULT_PAGE_SIZE,
+            NonZeroUsize::new(10).unwrap(),
+            None,
+        )
+        .unwrap();
 
         // Try to read the page, should fail with corruption error
         let result = storage.read_page_from_disk(0);
