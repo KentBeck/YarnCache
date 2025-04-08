@@ -10,6 +10,8 @@ mod arc_persistence_test;
 #[cfg(test)]
 mod disk_space_test;
 #[cfg(test)]
+mod page_storage_test;
+#[cfg(test)]
 mod persistence_test;
 #[cfg(test)]
 mod recovery_test;

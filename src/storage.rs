@@ -139,6 +139,8 @@ pub struct Page {
     header: PageHeader,
     /// Page data
     data: Vec<u8>,
+    /// Number of items stored in this page (for Node and Arc pages)
+    item_count: usize,
 }
 
 impl Page {
@@ -150,6 +152,7 @@ impl Page {
         Self {
             header,
             data: vec![0; data_size],
+            item_count: 0,
         }
     }
 
@@ -183,6 +186,11 @@ impl Page {
         hasher.update(&[self.header.page_type]);
         hasher.update(&self.header.reserved);
 
+        // For Node and Arc pages, include the item count in the checksum
+        if self.header.page_type == PageType::Node as u8 || self.header.page_type == PageType::Arc as u8 {
+            hasher.update(&(self.item_count as u32).to_le_bytes());
+        }
+
         // Hash the page data
         hasher.update(&self.data);
 
@@ -200,6 +208,172 @@ impl Page {
         let calculated_checksum = self.calculate_checksum();
 
         stored_checksum == calculated_checksum
+    }
+
+    /// Add a node to this page
+    pub fn add_node(&mut self, node: &Node) -> io::Result<()> {
+        if self.header.page_type != PageType::Node as u8 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "Cannot add node to non-node page",
+            ));
+        }
+
+        // Serialize the node
+        let node_bytes = bincode::serialize(node)
+            .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+
+        // Check if there's enough space
+        // Format: 4 bytes for item count + 4 bytes for each item offset + item data
+        let header_size = 4 + 4 * (self.item_count + 1);
+        let current_data_size = if self.item_count > 0 {
+            let mut cursor = io::Cursor::new(&self.data[4 + 4 * (self.item_count - 1)..4 + 4 * self.item_count]);
+            cursor.read_u32::<LittleEndian>()? as usize
+        } else {
+            header_size
+        };
+
+        let new_data_size = current_data_size + node_bytes.len();
+        if new_data_size > self.data.len() {
+            return Err(io::Error::new(
+                io::ErrorKind::OutOfMemory,
+                "Not enough space in page for node",
+            ));
+        }
+
+        // Update the item count
+        let mut cursor = io::Cursor::new(&mut self.data[..4]);
+        cursor.write_u32::<LittleEndian>(self.item_count as u32 + 1)?;
+
+        // Write the offset to the new item
+        let offset_pos = 4 + 4 * self.item_count;
+        let mut cursor = io::Cursor::new(&mut self.data[offset_pos..offset_pos + 4]);
+        cursor.write_u32::<LittleEndian>(new_data_size as u32)?;
+
+        // Write the node data
+        self.data[current_data_size..new_data_size].copy_from_slice(&node_bytes);
+
+        // Update the item count
+        self.item_count += 1;
+
+        Ok(())
+    }
+
+    /// Add an arc to this page
+    pub fn add_arc(&mut self, arc: &GraphArc) -> io::Result<()> {
+        if self.header.page_type != PageType::Arc as u8 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "Cannot add arc to non-arc page",
+            ));
+        }
+
+        // Serialize the arc
+        let arc_bytes = bincode::serialize(arc)
+            .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+
+        // Check if there's enough space
+        // Format: 4 bytes for item count + 4 bytes for each item offset + item data
+        let header_size = 4 + 4 * (self.item_count + 1);
+        let current_data_size = if self.item_count > 0 {
+            let mut cursor = io::Cursor::new(&self.data[4 + 4 * (self.item_count - 1)..4 + 4 * self.item_count]);
+            cursor.read_u32::<LittleEndian>()? as usize
+        } else {
+            header_size
+        };
+
+        let new_data_size = current_data_size + arc_bytes.len();
+        if new_data_size > self.data.len() {
+            return Err(io::Error::new(
+                io::ErrorKind::OutOfMemory,
+                "Not enough space in page for arc",
+            ));
+        }
+
+        // Update the item count
+        let mut cursor = io::Cursor::new(&mut self.data[..4]);
+        cursor.write_u32::<LittleEndian>(self.item_count as u32 + 1)?;
+
+        // Write the offset to the new item
+        let offset_pos = 4 + 4 * self.item_count;
+        let mut cursor = io::Cursor::new(&mut self.data[offset_pos..offset_pos + 4]);
+        cursor.write_u32::<LittleEndian>(new_data_size as u32)?;
+
+        // Write the arc data
+        self.data[current_data_size..new_data_size].copy_from_slice(&arc_bytes);
+
+        // Update the item count
+        self.item_count += 1;
+
+        Ok(())
+    }
+
+    /// Get all nodes from this page
+    pub fn get_nodes(&self) -> Result<Vec<Node>> {
+        if self.header.page_type != PageType::Node as u8 {
+            return Err(Error::Storage("Cannot get nodes from non-node page".to_string()));
+        }
+
+        let mut nodes = Vec::with_capacity(self.item_count);
+
+        // Read the nodes
+        for i in 0..self.item_count {
+            // Get the offset to the current item
+            let start_offset_pos = 4 + 4 * i;
+            let mut cursor = io::Cursor::new(&self.data[start_offset_pos..start_offset_pos + 4]);
+            let start_offset = cursor.read_u32::<LittleEndian>().map_err(|e| Error::Io(e))? as usize;
+
+            // Get the offset to the next item or the end of data
+            let end_offset = if i < self.item_count - 1 {
+                let end_offset_pos = 4 + 4 * (i + 1);
+                let mut cursor = io::Cursor::new(&self.data[end_offset_pos..end_offset_pos + 4]);
+                cursor.read_u32::<LittleEndian>().map_err(|e| Error::Io(e))? as usize
+            } else {
+                self.data.len()
+            };
+
+            // Deserialize the node
+            let node: Node = bincode::deserialize(&self.data[start_offset..end_offset])
+                .map_err(|e| Error::Corruption(format!("Failed to deserialize node: {}", e)))?;
+
+            nodes.push(node);
+        }
+
+        Ok(nodes)
+    }
+
+    /// Get all arcs from this page
+    pub fn get_arcs(&self) -> Result<Vec<GraphArc>> {
+        if self.header.page_type != PageType::Arc as u8 {
+            return Err(Error::Storage("Cannot get arcs from non-arc page".to_string()));
+        }
+
+        let mut arcs = Vec::with_capacity(self.item_count);
+
+        // Read the arcs
+        for i in 0..self.item_count {
+            // Get the offset to the current item
+            let start_offset_pos = 4 + 4 * i;
+            let mut cursor = io::Cursor::new(&self.data[start_offset_pos..start_offset_pos + 4]);
+            let start_offset = cursor.read_u32::<LittleEndian>().map_err(|e| Error::Io(e))? as usize;
+
+            // Get the offset to the next item or the end of data
+            let end_offset = if i < self.item_count - 1 {
+                let end_offset_pos = 4 + 4 * (i + 1);
+                let mut cursor = io::Cursor::new(&self.data[end_offset_pos..end_offset_pos + 4]);
+                cursor.read_u32::<LittleEndian>().map_err(|e| Error::Io(e))? as usize
+            } else {
+                self.data.len()
+            };
+
+            // Deserialize the arc
+            let arc: GraphArc = bincode::deserialize(&self.data[start_offset..end_offset])
+                .map_err(|e| Error::Corruption(format!("Failed to deserialize arc: {}", e)))?;
+
+            arcs.push(arc);
+        }
+
+        Ok(arcs)
     }
 
     /// Serialize the page to bytes
@@ -251,7 +425,16 @@ impl Page {
         let mut data = vec![0; data_size];
         data.copy_from_slice(&buffer[PAGE_HEADER_SIZE..page_size]);
 
-        let page = Self { header, data };
+        // For Node and Arc pages, the first 4 bytes of data contain the item count
+        let mut item_count = 0;
+        if header.page_type == PageType::Node as u8 || header.page_type == PageType::Arc as u8 {
+            if data.len() >= 4 {
+                let mut cursor = io::Cursor::new(&data[..4]);
+                item_count = cursor.read_u32::<LittleEndian>().unwrap_or(0) as usize;
+            }
+        }
+
+        let page = Self { header, data, item_count };
 
         // Verify the checksum
         if !page.verify_checksum() {
@@ -302,6 +485,14 @@ impl StorageManager {
         max_disk_space: Option<u64>,
         flush_interval_ms: u64,
     ) -> Result<Self> {
+        // Clear the in-memory stores before loading from disk
+        Self::NODE_STORE.with(|store| {
+            store.borrow_mut().clear();
+        });
+
+        Self::ARC_STORE.with(|store| {
+            store.borrow_mut().clear();
+        });
         // Open or create the file
         let file = OpenOptions::new()
             .read(true)
@@ -355,7 +546,61 @@ impl StorageManager {
         // Start the background flush task
         storage_manager.start_background_flush();
 
+        // Load nodes and arcs from pages
+        storage_manager.load_from_pages()?;
+
         Ok(storage_manager)
+    }
+
+    /// Load nodes and arcs from pages
+    fn load_from_pages(&self) -> Result<()> {
+        let total_pages = *self.total_pages.read();
+
+        // Skip if there are no pages
+        if total_pages == 0 {
+            return Ok(());
+        }
+
+        println!("Loading data from {} pages...", total_pages);
+
+        // Load nodes and arcs from all pages
+        let mut node_count = 0;
+        let mut arc_count = 0;
+
+        for page_number in 0..total_pages {
+            let page = self.get_page(page_number)?;
+            let page_guard = page.read();
+
+            match page_guard.page_type() {
+                PageType::Node => {
+                    // Load nodes from this page
+                    let nodes = page_guard.get_nodes()?;
+                    for node in nodes {
+                        // Store in the thread-local map
+                        Self::NODE_STORE.with(|store| {
+                            store.borrow_mut().insert(node.id.0, node.clone());
+                        });
+                        node_count += 1;
+                    }
+                },
+                PageType::Arc => {
+                    // Load arcs from this page
+                    let arcs = page_guard.get_arcs()?;
+                    for arc in arcs {
+                        // Store in the thread-local map
+                        Self::ARC_STORE.with(|store| {
+                            store.borrow_mut().insert(arc.id.0, arc.clone());
+                        });
+                        arc_count += 1;
+                    }
+                },
+                _ => {}
+            }
+        }
+
+        println!("Loaded {} nodes and {} arcs from disk", node_count, arc_count);
+
+        Ok(())
     }
 
     /// Get the total number of pages
@@ -503,6 +748,12 @@ impl StorageManager {
         // Create a new page
         let mut page = Page::new(page_number, page_type, self.page_size);
 
+        // Initialize the item count to 0 for node and arc pages
+        if page_type == PageType::Node || page_type == PageType::Arc {
+            let mut cursor = io::Cursor::new(&mut page.data[..4]);
+            cursor.write_u32::<LittleEndian>(0).map_err(|e| Error::Io(e))?;
+        }
+
         // For new pages, we write them to disk immediately to ensure the file is properly sized
         // This is a special case where we want synchronous behavior
         self.write_page_to_disk(&mut page)?;
@@ -512,6 +763,16 @@ impl StorageManager {
         self.cache.write().put(page_number, page.clone());
 
         Ok(page)
+    }
+
+    /// Allocate a new node page
+    pub fn allocate_node_page(&self) -> Result<StdArc<RwLock<Page>>> {
+        self.allocate_page(PageType::Node)
+    }
+
+    /// Allocate a new arc page
+    pub fn allocate_arc_page(&self) -> Result<StdArc<RwLock<Page>>> {
+        self.allocate_page(PageType::Arc)
     }
 
     /// Get a page by number
@@ -616,6 +877,42 @@ impl StorageManager {
             std::cell::RefCell::new(std::collections::HashMap::new());
     }
 
+    /// Find or create a node page with space for the given node
+    fn find_or_create_node_page(&self, node: &Node) -> Result<StdArc<RwLock<Page>>> {
+        // First, try to find an existing node page with enough space
+        let total_pages = *self.total_pages.read();
+        for page_number in 0..total_pages {
+            let page = self.get_page(page_number)?;
+            let page_guard = page.read();
+
+            // Skip non-node pages
+            if page_guard.page_type() != PageType::Node {
+                continue;
+            }
+
+            // Check if there's enough space
+            let node_bytes = bincode::serialize(node)
+                .map_err(|e| Error::Storage(format!("Failed to serialize node: {}", e)))?;
+
+            // Format: 4 bytes for item count + 4 bytes for each item offset + item data
+            let header_size = 4 + 4 * (page_guard.item_count + 1);
+            let current_data_size = if page_guard.item_count > 0 {
+                let mut cursor = io::Cursor::new(&page_guard.data[4 + 4 * (page_guard.item_count - 1)..4 + 4 * page_guard.item_count]);
+                cursor.read_u32::<LittleEndian>().map_err(|e| Error::Io(e))? as usize
+            } else {
+                header_size
+            };
+
+            let new_data_size = current_data_size + node_bytes.len();
+            if new_data_size <= page_guard.data.len() {
+                return Ok(page.clone());
+            }
+        }
+
+        // If no suitable page found, create a new one
+        self.allocate_node_page()
+    }
+
     /// Store a node in the database
     pub fn store_node(&self, node: &Node) -> Result<()> {
         // Check disk space limit before writing
@@ -631,20 +928,56 @@ impl StorageManager {
             }
         }
 
-        // For testing, just store in the thread-local map
+        // Store in the thread-local map for backward compatibility
         Self::NODE_STORE.with(|store| {
             store.borrow_mut().insert(node.id.0, node.clone());
         });
+
+        // Store in a page
+        let page = self.find_or_create_node_page(node)?;
+        let mut page_guard = page.write();
+        page_guard.add_node(node).map_err(|e| Error::Io(e))?;
+
+        // Mark the page as dirty
+        self.mark_page_dirty(page_guard.page_number());
+
+        // Update the page in the cache
+        self.update_page(page.clone());
 
         Ok(())
     }
 
     /// Get a node from the database
     pub fn get_node(&self, node_id: NodeId) -> Result<Option<Node>> {
-        // For testing, just retrieve from the thread-local map
+        // First check the thread-local map for backward compatibility
         let node = Self::NODE_STORE.with(|store| store.borrow().get(&node_id.0).cloned());
+        if node.is_some() {
+            return Ok(node);
+        }
 
-        Ok(node)
+        // If not found in memory, search through all node pages
+        let total_pages = *self.total_pages.read();
+        for page_number in 0..total_pages {
+            let page = self.get_page(page_number)?;
+            let page_guard = page.read();
+
+            // Skip non-node pages
+            if page_guard.page_type() != PageType::Node {
+                continue;
+            }
+
+            // Get all nodes from the page
+            let nodes = page_guard.get_nodes()?;
+
+            // Find the node with the matching ID
+            for node in nodes {
+                if node.id == node_id {
+                    return Ok(Some(node));
+                }
+            }
+        }
+
+        Ok(None)
     }
 
     /// Update a node in the database
@@ -662,10 +995,61 @@ impl StorageManager {
             }
         }
 
-        // For testing, just update in the thread-local map
+        // Update in the thread-local map for backward compatibility
         Self::NODE_STORE.with(|store| {
             store.borrow_mut().insert(node.id.0, node.clone());
         });
+
+        // First, try to find the node in a page and update it
+        let total_pages = *self.total_pages.read();
+        for page_number in 0..total_pages {
+            let page = self.get_page(page_number)?;
+            let page_guard = page.read();
+
+            // Skip non-node pages
+            if page_guard.page_type() != PageType::Node {
+                continue;
+            }
+
+            // Get all nodes from the page
+            let nodes = page_guard.get_nodes()?;
+
+            // Find the node with the matching ID
+            for i in 0..nodes.len() {
+                if nodes[i].id == node.id {
+                    // Found the node, delete it and add the updated version
+                    // This is inefficient but simple for now
+                    drop(page_guard); // Release the read lock
+
+                    // Delete the node from this page (by creating a new page without it)
+                    let mut new_page = Page::new(page_number, PageType::Node, self.page_size);
+                    let mut cursor = io::Cursor::new(&mut new_page.data[..4]);
+                    cursor.write_u32::<LittleEndian>(0).map_err(|e| Error::Io(e))?;
+
+                    // Add all nodes except the one being updated
+                    for j in 0..nodes.len() {
+                        if j != i {
+                            new_page.add_node(&nodes[j]).map_err(|e| Error::Io(e))?;
+                        }
+                    }
+
+                    // Add the updated node
+                    new_page.add_node(node).map_err(|e| Error::Io(e))?;
+
+                    // Replace the page in the cache
+                    let new_page_arc = StdArc::new(RwLock::new(new_page));
+                    self.cache.write().put(page_number, new_page_arc.clone());
+
+                    // Mark the page as dirty
+                    self.mark_page_dirty(page_number);
+
+                    return Ok(());
+                }
+            }
+        }
+
+        // If not found in any page, store it as a new node
+        self.store_node(node)?;
 
         Ok(())
     }
@@ -685,11 +1069,61 @@ impl StorageManager {
             }
         }
 
-        // For testing, just remove from the thread-local map
-        let removed =
+        // Remove from the thread-local map for backward compatibility
+        let removed_from_memory =
             Self::NODE_STORE.with(|store| store.borrow_mut().remove(&node_id.0).is_some());
 
-        Ok(removed)
+        // Try to find and remove the node from a page
+        let mut removed_from_page = false;
+        let total_pages = *self.total_pages.read();
+        for page_number in 0..total_pages {
+            let page = self.get_page(page_number)?;
+            let page_guard = page.read();
+
+            // Skip non-node pages
+            if page_guard.page_type() != PageType::Node {
+                continue;
+            }
+
+            // Get all nodes from the page
+            let nodes = page_guard.get_nodes()?;
+
+            // Find the node with the matching ID
+            for i in 0..nodes.len() {
+                if nodes[i].id == node_id {
+                    // Found the node, create a new page without it
+                    drop(page_guard); // Release the read lock
+
+                    // Create a new page without the deleted node
+                    let mut new_page = Page::new(page_number, PageType::Node, self.page_size);
+                    let mut cursor = io::Cursor::new(&mut new_page.data[..4]);
+                    cursor.write_u32::<LittleEndian>(0).map_err(|e| Error::Io(e))?;
+
+                    // Add all nodes except the one being deleted
+                    for j in 0..nodes.len() {
+                        if j != i {
+                            new_page.add_node(&nodes[j]).map_err(|e| Error::Io(e))?;
+                        }
+                    }
+
+                    // Replace the page in the cache
+                    let new_page_arc = StdArc::new(RwLock::new(new_page));
+                    self.cache.write().put(page_number, new_page_arc.clone());
+
+                    // Mark the page as dirty
+                    self.mark_page_dirty(page_number);
+
+                    removed_from_page = true;
+                    break;
+                }
+            }
+
+            if removed_from_page {
+                break;
+            }
+        }
+
+        Ok(removed_from_memory || removed_from_page)
     }
 
     // Note: In a real implementation, we would have helper methods for node indexing
@@ -718,6 +1152,42 @@ impl StorageManager {
         *usage += additional_bytes;
     }
 
+    /// Find or create an arc page with space for the given arc
+    fn find_or_create_arc_page(&self, arc: &GraphArc) -> Result<StdArc<RwLock<Page>>> {
+        // First, try to find an existing arc page with enough space
+        let total_pages = *self.total_pages.read();
+        for page_number in 0..total_pages {
+            let page = self.get_page(page_number)?;
+            let page_guard = page.read();
+
+            // Skip non-arc pages
+            if page_guard.page_type() != PageType::Arc {
+                continue;
+            }
+
+            // Check if there's enough space
+            let arc_bytes = bincode::serialize(arc)
+                .map_err(|e| Error::Storage(format!("Failed to serialize arc: {}", e)))?;
+
+            // Format: 4 bytes for item count + 4 bytes for each item offset + item data
+            let header_size = 4 + 4 * (page_guard.item_count + 1);
+            let current_data_size = if page_guard.item_count > 0 {
+                let mut cursor = io::Cursor::new(&page_guard.data[4 + 4 * (page_guard.item_count - 1)..4 + 4 * page_guard.item_count]);
+                cursor.read_u32::<LittleEndian>().map_err(|e| Error::Io(e))? as usize
+            } else {
+                header_size
+            };
+
+            let new_data_size = current_data_size + arc_bytes.len();
+            if new_data_size <= page_guard.data.len() {
+                return Ok(page.clone());
+            }
+        }
+
+        // If no suitable page found, create a new one
+        self.allocate_arc_page()
+    }
+
     /// Store an arc in the database
     pub fn store_arc(&self, arc: &GraphArc) -> Result<()> {
         // Check disk space limit before writing
@@ -733,20 +1203,56 @@ impl StorageManager {
             }
         }
 
-        // For testing, just store in the thread-local map
+        // Store in the thread-local map for backward compatibility
         Self::ARC_STORE.with(|store| {
             store.borrow_mut().insert(arc.id.0, arc.clone());
         });
+
+        // Store in a page
+        let page = self.find_or_create_arc_page(arc)?;
+        let mut page_guard = page.write();
+        page_guard.add_arc(arc).map_err(|e| Error::Io(e))?;
+
+        // Mark the page as dirty
+        self.mark_page_dirty(page_guard.page_number());
+
+        // Update the page in the cache
+        self.update_page(page.clone());
 
         Ok(())
     }
 
     /// Get an arc from the database
     pub fn get_arc(&self, arc_id: ArcId) -> Result<Option<GraphArc>> {
-        // For testing, just retrieve from the thread-local map
+        // First check the thread-local map for backward compatibility
         let arc = Self::ARC_STORE.with(|store| store.borrow().get(&arc_id.0).cloned());
+        if arc.is_some() {
+            return Ok(arc);
+        }
 
-        Ok(arc)
+        // If not found in memory, search through all arc pages
+        let total_pages = *self.total_pages.read();
+        for page_number in 0..total_pages {
+            let page = self.get_page(page_number)?;
+            let page_guard = page.read();
+
+            // Skip non-arc pages
+            if page_guard.page_type() != PageType::Arc {
+                continue;
+            }
+
+            // Get all arcs from the page
+            let arcs = page_guard.get_arcs()?;
+
+            // Find the arc with the matching ID
+            for arc in arcs {
+                if arc.id == arc_id {
+                    return Ok(Some(arc));
+                }
+            }
+        }
+
+        Ok(None)
     }
 
     /// Update an arc in the database
@@ -764,10 +1270,61 @@ impl StorageManager {
             }
         }
 
-        // For testing, just update in the thread-local map
+        // Update in the thread-local map for backward compatibility
         Self::ARC_STORE.with(|store| {
             store.borrow_mut().insert(arc.id.0, arc.clone());
         });
+
+        // First, try to find the arc in a page and update it
+        let total_pages = *self.total_pages.read();
+        for page_number in 0..total_pages {
+            let page = self.get_page(page_number)?;
+            let page_guard = page.read();
+
+            // Skip non-arc pages
+            if page_guard.page_type() != PageType::Arc {
+                continue;
+            }
+
+            // Get all arcs from the page
+            let arcs = page_guard.get_arcs()?;
+
+            // Find the arc with the matching ID
+            for i in 0..arcs.len() {
+                if arcs[i].id == arc.id {
+                    // Found the arc, delete it and add the updated version
+                    // This is inefficient but simple for now
+                    drop(page_guard); // Release the read lock
+
+                    // Delete the arc from this page (by creating a new page without it)
+                    let mut new_page = Page::new(page_number, PageType::Arc, self.page_size);
+                    let mut cursor = io::Cursor::new(&mut new_page.data[..4]);
+                    cursor.write_u32::<LittleEndian>(0).map_err(|e| Error::Io(e))?;
+
+                    // Add all arcs except the one being updated
+                    for j in 0..arcs.len() {
+                        if j != i {
+                            new_page.add_arc(&arcs[j]).map_err(|e| Error::Io(e))?;
+                        }
+                    }
+
+                    // Add the updated arc
+                    new_page.add_arc(arc).map_err(|e| Error::Io(e))?;
+
+                    // Replace the page in the cache
+                    let new_page_arc = StdArc::new(RwLock::new(new_page));
+                    self.cache.write().put(page_number, new_page_arc.clone());
+
+                    // Mark the page as dirty
+                    self.mark_page_dirty(page_number);
+
+                    return Ok(());
+                }
+            }
+        }
+
+        // If not found in any page, store it as a new arc
+        self.store_arc(arc)?;
 
         Ok(())
     }
@@ -787,10 +1344,60 @@ impl StorageManager {
             }
         }
 
-        // For testing, just remove from the thread-local map
-        let removed = Self::ARC_STORE.with(|store| store.borrow_mut().remove(&arc_id.0).is_some());
+        // Remove from the thread-local map for backward compatibility
+        let removed_from_memory = Self::ARC_STORE.with(|store| store.borrow_mut().remove(&arc_id.0).is_some());
 
-        Ok(removed)
+        // Try to find and remove the arc from a page
+        let mut removed_from_page = false;
+        let total_pages = *self.total_pages.read();
+        for page_number in 0..total_pages {
+            let page = self.get_page(page_number)?;
+            let page_guard = page.read();
+
+            // Skip non-arc pages
+            if page_guard.page_type() != PageType::Arc {
+                continue;
+            }
+
+            // Get all arcs from the page
+            let arcs = page_guard.get_arcs()?;
+
+            // Find the arc with the matching ID
+            for i in 0..arcs.len() {
+                if arcs[i].id == arc_id {
+                    // Found the arc, create a new page without it
+                    drop(page_guard); // Release the read lock
+
+                    // Create a new page without the deleted arc
+                    let mut new_page = Page::new(page_number, PageType::Arc, self.page_size);
+                    let mut cursor = io::Cursor::new(&mut new_page.data[..4]);
+                    cursor.write_u32::<LittleEndian>(0).map_err(|e| Error::Io(e))?;
+
+                    // Add all arcs except the one being deleted
+                    for j in 0..arcs.len() {
+                        if j != i {
+                            new_page.add_arc(&arcs[j]).map_err(|e| Error::Io(e))?;
+                        }
+                    }
+
+                    // Replace the page in the cache
+                    let new_page_arc = StdArc::new(RwLock::new(new_page));
+                    self.cache.write().put(page_number, new_page_arc.clone());
+
+                    // Mark the page as dirty
+                    self.mark_page_dirty(page_number);
+
+                    removed_from_page = true;
+                    break;
+                }
+            }
+
+            if removed_from_page {
+                break;
+            }
+        }
+
+        Ok(removed_from_memory || removed_from_page)
     }
 
     /// Recover the database from the transaction log
