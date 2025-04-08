@@ -14,7 +14,7 @@ mod tests {
 
     use crate::server::ServerConfig;
     use crate::storage::{DEFAULT_PAGE_SIZE, StorageManager, Page, PageType};
-    use crate::types::{Node, NodeId, TypeId, Timestamp};
+    use crate::types::{Node, NodeId, TypeId, Timestamp, ArcId, Arc as GraphArc};
     use crate::{Server, YarnCacheApi};
 
     // A simplified storage manager for testing
@@ -185,6 +185,244 @@ mod tests {
 
                 println!("Second storage manager will be dropped.");
             }
+
+            println!("Test completed successfully.");
+        });
+    }
+
+    #[test]
+    fn test_direct_arc_storage() {
+        // This test uses direct file I/O to verify page-based storage for arcs
+        let rt = Runtime::new().unwrap();
+        rt.block_on(async {
+            println!("Starting test_direct_arc_storage...");
+
+            // Create a temporary directory for the database
+            let temp_dir = TempDir::new().unwrap();
+            let db_path = temp_dir.path().join("direct_arc_test.db");
+
+            // Create an arc
+            let id = ArcId(42);
+            let from_node = NodeId(1);
+            let to_node = NodeId(2);
+            let type_id = TypeId(100);
+            let timestamp = Timestamp(std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_millis() as u64);
+            let data = vec![1, 2, 3, 4, 5];
+            let arc = GraphArc {
+                id,
+                from_node,
+                to_node,
+                type_id,
+                timestamp,
+                data: data.clone(),
+            };
+
+            // Create a page to store the arc
+            use crate::storage::{Page, PageType};
+            let page_size = DEFAULT_PAGE_SIZE;
+            let mut page = Page::new(0, PageType::Arc, page_size);
+
+            // Add the arc to the page
+            println!("Adding arc to page...");
+            page.add_arc(&arc).unwrap();
+
+            // Write the page to disk
+            println!("Writing page to disk...");
+            use std::fs::OpenOptions;
+            use std::io::{Seek, SeekFrom, Write};
+            {
+                let mut file = OpenOptions::new()
+                    .read(true)
+                    .write(true)
+                    .create(true)
+                    .open(&db_path)
+                    .unwrap();
+
+                // Serialize the page
+                let mut buffer = vec![0; page_size];
+                page.to_bytes(&mut buffer).unwrap();
+
+                // Write the page
+                file.seek(SeekFrom::Start(0)).unwrap();
+                file.write_all(&buffer).unwrap();
+                file.flush().unwrap();
+
+                println!("Page written to disk");
+            }
+
+            // Read the page from disk
+            println!("Reading page from disk...");
+            let loaded_page = {
+                use std::fs::File;
+                use std::io::Read;
+
+                let mut file = File::open(&db_path).unwrap();
+                let mut buffer = vec![0; page_size];
+                file.read_exact(&mut buffer).unwrap();
+
+                Page::from_bytes(&buffer, page_size).unwrap()
+            };
+
+            // Verify the page type
+            assert_eq!(loaded_page.page_type(), PageType::Arc, "Page type should be Arc");
+
+            // Read the arc from the page
+            println!("Reading arc from page...");
+            let loaded_arcs = loaded_page.get_arcs().unwrap();
+
+            // Verify the arc was loaded correctly
+            assert_eq!(loaded_arcs.len(), 1, "Should have loaded 1 arc");
+            let loaded_arc = &loaded_arcs[0];
+            println!("Loaded arc: ID={}, from={}, to={}, type={}, data={:?}",
+                loaded_arc.id.0, loaded_arc.from_node.0, loaded_arc.to_node.0, loaded_arc.type_id.0, loaded_arc.data);
+            println!("Original arc: ID={}, from={}, to={}, type={}, data={:?}",
+                arc.id.0, arc.from_node.0, arc.to_node.0, arc.type_id.0, arc.data);
+            assert_eq!(loaded_arc.id, id, "Arc ID should match");
+            assert_eq!(loaded_arc.from_node, from_node, "Arc from_node should match");
+            assert_eq!(loaded_arc.to_node, to_node, "Arc to_node should match");
+            assert_eq!(loaded_arc.type_id, type_id, "Arc type_id should match");
+            assert_eq!(loaded_arc.data, data, "Arc data should match");
+
+            println!("Test completed successfully.");
+        });
+    }
+
+    #[test]
+    fn test_direct_file_storage() {
+        // This test uses direct file I/O to verify page-based storage without the complexity of StorageManager
+        let rt = Runtime::new().unwrap();
+        rt.block_on(async {
+            println!("Starting test_direct_file_storage...");
+
+            // Create a temporary directory for the database
+            let temp_dir = TempDir::new().unwrap();
+            let db_path = temp_dir.path().join("direct_file_test.db");
+
+            // Create a node
+            let id = NodeId(42);
+            let type_id = TypeId(100);
+            let timestamp = Timestamp(std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_millis() as u64);
+            let data = vec![1, 2, 3, 4, 5];
+            let node = Node {
+                id,
+                type_id,
+                timestamp,
+                data: data.clone(),
+            };
+
+            // Create a page to store the node
+            use crate::storage::{Page, PageType};
+            let page_size = DEFAULT_PAGE_SIZE;
+            let mut page = Page::new(0, PageType::Node, page_size);
+
+            // Instead of manually manipulating the page data, use the add_node method
+            println!("Adding node to page...");
+            page.add_node(&node).unwrap();
+
+            // Write the page to disk
+            println!("Writing page to disk...");
+            use std::fs::OpenOptions;
+            use std::io::{Seek, SeekFrom, Write};
+            {
+                let mut file = OpenOptions::new()
+                    .read(true)
+                    .write(true)
+                    .create(true)
+                    .open(&db_path)
+                    .unwrap();
+
+                // Serialize the page
+                let mut buffer = vec![0; page_size];
+                page.to_bytes(&mut buffer).unwrap();
+
+                // Write the page
+                file.seek(SeekFrom::Start(0)).unwrap();
+                file.write_all(&buffer).unwrap();
+                file.flush().unwrap();
+
+                println!("Page written to disk");
+
+                // Debug: Dump the first 64 bytes of the buffer
+                println!("First 64 bytes of buffer: {:?}", &buffer[..64.min(buffer.len())]);
+            }
+
+            // Read the page from disk
+            println!("Reading page from disk...");
+            let loaded_page = {
+                use std::fs::File;
+                use std::io::Read;
+
+                let mut file = File::open(&db_path).unwrap();
+                let mut buffer = vec![0; page_size];
+                file.read_exact(&mut buffer).unwrap();
+
+                // Debug: Dump the first 64 bytes of the buffer
+                println!("First 64 bytes of read buffer: {:?}", &buffer[..64.min(buffer.len())]);
+
+                Page::from_bytes(&buffer, page_size).unwrap()
+            };
+
+            // Debug: Print page info
+            println!("Loaded page: type={:?}, item_count={}", loaded_page.page_type(), loaded_page.item_count());
+
+            // Verify the page type
+            assert_eq!(loaded_page.page_type(), PageType::Node, "Page type should be Node");
+
+            // Read the node from the page
+            println!("Reading node from page...");
+
+            // Debug: Dump the page data
+            let page_data = loaded_page.data();
+            println!("Page data length: {}", page_data.len());
+            println!("First 4 bytes (item count): {:?}", &page_data[..4]);
+
+            // Read the first offset
+            use byteorder::{LittleEndian, ReadBytesExt};
+            let mut cursor = std::io::Cursor::new(&page_data[4..8]);
+            let offset = cursor.read_u32::<LittleEndian>().unwrap();
+            println!("First item offset: {}", offset);
+
+            // Dump the node data
+            println!("Node data: {:?}", &page_data[offset as usize..offset as usize + 64.min(page_data.len() - offset as usize)]);
+
+            // Try to manually deserialize the node
+            let node_data = &page_data[offset as usize..page_data.len()];
+            println!("Attempting to manually deserialize node from offset {}", offset);
+            match bincode::deserialize::<Node>(node_data) {
+                Ok(node) => {
+                    println!("Manually deserialized node: ID={}, type={}, data={:?}", node.id.0, node.type_id.0, node.data);
+                },
+                Err(e) => {
+                    println!("Error deserializing node: {}", e);
+                }
+            }
+
+            // Try to deserialize from the beginning of the page data
+            println!("Attempting to deserialize node from beginning of page data");
+            match bincode::deserialize::<Node>(&page_data[8..]) {
+                Ok(node) => {
+                    println!("Deserialized node from beginning: ID={}, type={}, data={:?}", node.id.0, node.type_id.0, node.data);
+                },
+                Err(e) => {
+                    println!("Error deserializing from beginning: {}", e);
+                }
+            }
+
+            let loaded_nodes = loaded_page.get_nodes().unwrap();
+
+            // Verify the node was loaded correctly
+            assert_eq!(loaded_nodes.len(), 1, "Should have loaded 1 node");
+            let loaded_node = &loaded_nodes[0];
+            println!("Loaded node: ID={}, type={}, data={:?}", loaded_node.id.0, loaded_node.type_id.0, loaded_node.data);
+            println!("Original node: ID={}, type={}, data={:?}", id.0, type_id.0, data);
+            assert_eq!(loaded_node.id, id, "Node ID should match");
+            assert_eq!(loaded_node.data, data, "Node data should match");
 
             println!("Test completed successfully.");
         });
