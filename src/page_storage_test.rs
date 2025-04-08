@@ -13,8 +13,148 @@ mod tests {
     use tokio::runtime::Runtime;
 
     use crate::server::ServerConfig;
-    use crate::storage::DEFAULT_PAGE_SIZE;
+    use crate::storage::{DEFAULT_PAGE_SIZE, StorageManager};
+    use crate::types::{Node, NodeId, TypeId, Timestamp};
     use crate::{Server, YarnCacheApi};
+
+    #[test]
+    fn test_storage_manager_node_persistence() {
+        // This test directly tests the StorageManager's ability to store and retrieve nodes
+        let rt = Runtime::new().unwrap();
+        rt.block_on(async {
+            println!("Starting test_storage_manager_node_persistence...");
+
+            // Create a temporary directory for the database
+            let temp_dir = TempDir::new().unwrap();
+            let db_path = temp_dir.path().join("node_persistence_test.db");
+
+            // Create a storage manager
+            println!("Creating storage manager...");
+            let storage = StorageManager::new(
+                db_path.clone(),
+                DEFAULT_PAGE_SIZE,
+                NonZeroUsize::new(10).unwrap(),
+                None, // Unlimited for tests
+                1000, // 1 second flush interval
+            ).unwrap();
+
+            // Create a node
+            let id = NodeId(42);
+            let type_id = TypeId(100);
+            let timestamp = Timestamp(std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_millis() as u64);
+            let data = vec![1, 2, 3, 4, 5];
+            let node = Node {
+                id,
+                type_id,
+                timestamp,
+                data: data.clone(),
+            };
+
+            // Store the node
+            println!("Storing node...");
+            storage.store_node(&node).unwrap();
+
+            // Verify the node exists in memory
+            println!("Verifying node exists in memory...");
+            let retrieved_node = storage.get_node(id).unwrap().unwrap();
+            assert_eq!(retrieved_node.data, data);
+
+            // Manually write the page to disk
+            println!("Writing page to disk...");
+            storage.flush_all().unwrap();
+
+            // Drop the storage manager to close the file
+            drop(storage);
+
+            // Create a new storage manager with the same database file
+            println!("Creating new storage manager...");
+            let storage2 = StorageManager::new(
+                db_path.clone(),
+                DEFAULT_PAGE_SIZE,
+                NonZeroUsize::new(10).unwrap(),
+                None, // Unlimited for tests
+                1000, // 1 second flush interval
+            ).unwrap();
+
+            // Verify the node exists in the new storage manager
+            println!("Verifying node exists in new storage manager...");
+            let retrieved_node = storage2.get_node(id).unwrap();
+            assert!(retrieved_node.is_some(), "Node should be loaded from disk");
+            assert_eq!(retrieved_node.unwrap().data, data);
+
+            println!("Test completed successfully.");
+        });
+    }
+
+    #[test]
+    fn test_direct_page_storage() {
+        let rt = Runtime::new().unwrap();
+        rt.block_on(async {
+            println!("Starting test_direct_page_storage...");
+
+            // Create a temporary directory for the database
+            let temp_dir = TempDir::new().unwrap();
+            let db_path = temp_dir.path().join("direct_page_test.db");
+
+            // Create a storage manager directly
+            println!("Creating storage manager...");
+            let storage = StorageManager::new(
+                db_path.clone(),
+                DEFAULT_PAGE_SIZE,
+                NonZeroUsize::new(10).unwrap(),
+                None, // Unlimited for tests
+                1000, // 1 second flush interval
+            ).unwrap();
+
+            // Add a node directly to the storage
+            println!("Adding a node...");
+            let id = NodeId(42);
+            let type_id = TypeId(100);
+            let data = vec![1, 2, 3, 4, 5];
+            let timestamp = Timestamp(std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_millis() as u64);
+            let node = Node {
+                id,
+                type_id,
+                timestamp,
+                data: data.clone(),
+            };
+            storage.store_node(&node).unwrap();
+
+            // Verify the node exists in memory
+            println!("Verifying node exists in memory...");
+            let retrieved_node = storage.get_node(id).unwrap().unwrap();
+            assert_eq!(retrieved_node.data, data);
+
+            // Flush all pages to disk
+            println!("Flushing all pages to disk...");
+            storage.flush_all().unwrap();
+            println!("Flush complete.");
+
+            // Create a new storage manager with the same database file
+            println!("Creating new storage manager...");
+            let storage2 = StorageManager::new(
+                db_path.clone(),
+                DEFAULT_PAGE_SIZE,
+                NonZeroUsize::new(10).unwrap(),
+                None, // Unlimited for tests
+                1000, // 1 second flush interval
+            ).unwrap();
+
+            // The node should be loaded from disk pages on startup
+            println!("Verifying node was loaded from disk...");
+            let loaded_node = storage2.get_node(id).unwrap();
+            assert!(loaded_node.is_some(), "Node should be loaded from disk pages");
+            assert_eq!(loaded_node.unwrap().data, data);
+
+            println!("Test completed successfully.");
+        });
+    }
 
     #[test]
     fn test_simple_node_persistence() {

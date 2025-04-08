@@ -668,21 +668,29 @@ impl StorageManager {
 
     /// Flush all dirty pages to disk
     fn flush_dirty_pages(&self) -> Result<()> {
+        println!("Flushing dirty pages");
+
         // Get the list of dirty pages
         let dirty_pages: Vec<u32> = {
             let dirty = self.dirty_pages.read();
-            dirty.iter().cloned().collect()
+            let pages: Vec<u32> = dirty.iter().cloned().collect();
+            println!("Found {} dirty pages to flush", pages.len());
+            pages
         };
 
         if dirty_pages.is_empty() {
+            println!("No dirty pages to flush");
             return Ok(());
         }
 
         // Acquire the file lock once for all pages
         let mut file = self.file.lock();
+        println!("Acquired file lock for flushing");
 
         // Flush each dirty page
         for page_number in dirty_pages {
+            println!("Flushing page {}", page_number);
+
             // Get the page from the cache
             let page_option = {
                 let cache = self.cache.read();
@@ -693,6 +701,7 @@ impl StorageManager {
                 // Get a write lock on the page
                 let mut page = page_arc.write();
                 let offset = page.page_number() as u64 * self.page_size as u64;
+                println!("Writing page {} at offset {}", page_number, offset);
 
                 // Seek to the page
                 file.seek(SeekFrom::Start(offset))?;
@@ -704,13 +713,21 @@ impl StorageManager {
                 // Write the page
                 file.write_all(&buffer)?;
 
+                // Drop the page write lock before acquiring the dirty_pages write lock
+                // to avoid potential deadlocks
+                drop(page);
+
                 // Remove from dirty set
                 self.dirty_pages.write().remove(&page_number);
+                println!("Page {} flushed and removed from dirty set", page_number);
+            } else {
+                println!("Page {} not found in cache", page_number);
             }
         }
 
         // Flush the file once after all pages are written
         file.flush()?;
+        println!("File flushed to disk");
 
         Ok(())
     }
@@ -722,19 +739,24 @@ impl StorageManager {
 
     /// Write a page to disk immediately (synchronous)
     fn write_page_to_disk(&self, page: &mut Page) -> Result<()> {
+        let page_number = page.page_number();
+        let offset = page_number as u64 * self.page_size as u64;
+        println!("Writing page {} to disk at offset {}", page_number, offset);
+
+        // Serialize the page before acquiring the file lock
+        let mut buffer = vec![0; self.page_size];
+        page.to_bytes(&mut buffer).map_err(|e| Error::Io(e))?;
+
+        // Now acquire the file lock
         let mut file = self.file.lock();
-        let offset = page.page_number() as u64 * self.page_size as u64;
 
         // Seek to the page
         file.seek(SeekFrom::Start(offset))?;
 
-        // Serialize the page
-        let mut buffer = vec![0; self.page_size];
-        page.to_bytes(&mut buffer).map_err(|e| Error::Io(e))?;
-
         // Write the page
         file.write_all(&buffer)?;
         file.flush()?;
+        println!("Page {} written to disk", page_number);
 
         Ok(())
     }
@@ -800,6 +822,8 @@ impl StorageManager {
 
     /// Flush a page to disk
     pub fn flush_page(&self, page_number: u32) -> Result<()> {
+        println!("Flushing page {}", page_number);
+
         // Check if the page is in the cache
         let page_option = {
             // Use a separate scope for the read lock
@@ -811,12 +835,25 @@ impl StorageManager {
         if let Some(page) = page_option {
             // For explicit flush requests, we write synchronously
             let mut page_guard = page.write();
+            println!("Writing page {} to disk", page_number);
             self.write_page_to_disk(&mut page_guard)?;
+
+            // Drop the page write lock before acquiring the dirty_pages write lock
+            // to avoid potential deadlocks
+            drop(page_guard);
+        } else {
+            println!("Page {} not found in cache", page_number);
         }
 
         // Remove from dirty set if it was there
-        self.dirty_pages.write().remove(&page_number);
+        {
+            let mut dirty_set = self.dirty_pages.write();
+            if dirty_set.remove(&page_number) {
+                println!("Removed page {} from dirty set", page_number);
+            }
+        }
 
+        println!("Page {} flush complete", page_number);
         Ok(())
     }
 
@@ -831,6 +868,8 @@ impl StorageManager {
 
     /// Flush all pages to disk
     pub fn flush_all(&self) -> Result<()> {
+        println!("Flushing all pages to disk");
+
         // First, flush all dirty pages
         self.flush_dirty_pages()?;
 
@@ -838,20 +877,29 @@ impl StorageManager {
         let page_numbers: Vec<u32> = {
             // Use a separate scope for the read lock
             let cache_guard = self.cache.read();
-            cache_guard
+            let pages: Vec<u32> = cache_guard
                 .iter()
                 .map(|(page_number, _)| *page_number)
-                .collect()
+                .collect();
+            println!("Found {} total pages in cache", pages.len());
+            pages
         };
 
         // Flush each page
         for page_number in page_numbers {
             // Check if the page is already flushed (not in dirty set)
-            if !self.dirty_pages.read().contains(&page_number) {
+            let needs_flush = {
+                let dirty_set = self.dirty_pages.read();
+                !dirty_set.contains(&page_number)
+            };
+
+            if needs_flush {
+                println!("Flushing non-dirty page {}", page_number);
                 self.flush_page(page_number)?
             }
         }
 
+        println!("All pages flushed to disk");
         Ok(())
     }
 

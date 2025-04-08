@@ -105,12 +105,19 @@ impl Server {
         // Wait for shutdown signal
         let _ = shutdown_rx.await;
 
-        // Flush all pages to disk
-        state.storage.flush_all()?;
+        println!("Server received shutdown signal");
 
-        // Mark the server as stopped
+        // Mark the server as stopped first to prevent new operations
         state.running.store(false, Ordering::SeqCst);
 
+        // Flush all pages to disk
+        println!("Server flushing all pages to disk");
+        match state.storage.flush_all() {
+            Ok(_) => println!("Server flush complete"),
+            Err(e) => println!("Server flush error: {}", e),
+        }
+
+        println!("Server shutdown complete");
         Ok(())
     }
 
@@ -121,16 +128,39 @@ impl Server {
 
     /// Shutdown the server
     pub async fn shutdown(&self) -> Result<()> {
+        println!("Starting server shutdown");
+
+        // First, manually flush all pages to disk
+        println!("Manually flushing all pages to disk before shutdown");
+        match self.state.storage.flush_all() {
+            Ok(_) => println!("Manual flush complete"),
+            Err(e) => println!("Manual flush error: {}", e),
+        }
+
         // Send the shutdown signal
+        println!("Sending shutdown signal");
         if let Some(shutdown_tx) = self.state.shutdown_tx.lock().await.take() {
             let _ = shutdown_tx.send(());
+            println!("Shutdown signal sent");
+        } else {
+            println!("No shutdown channel available");
         }
 
         // Wait for the server task to complete
+        println!("Waiting for server task to complete");
         if let Some(handle) = self.state.task_handle.lock().await.take() {
-            handle.await??;
+            match handle.await {
+                Ok(result) => match result {
+                    Ok(_) => println!("Server task completed successfully"),
+                    Err(e) => println!("Server task error: {}", e),
+                },
+                Err(e) => println!("Failed to join server task: {}", e),
+            }
+        } else {
+            println!("No server task handle available");
         }
 
+        println!("Server shutdown complete");
         Ok(())
     }
 
