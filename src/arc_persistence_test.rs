@@ -20,6 +20,7 @@ mod tests {
             page_size: DEFAULT_PAGE_SIZE,
             cache_size: NonZeroUsize::new(10).unwrap(),
             max_disk_space: None, // Unlimited for tests
+            flush_interval_ms: 1000, // 1 second flush interval
         };
 
         let server = Server::with_config(config).await.unwrap();

@@ -289,6 +289,8 @@ pub struct StorageManager {
     flush_running: AtomicBool,
     /// Flush threshold (number of dirty pages that triggers a flush)
     flush_threshold: usize,
+    /// Flush interval in milliseconds
+    flush_interval_ms: u64,
 }
 
 impl StorageManager {
@@ -298,6 +300,7 @@ impl StorageManager {
         page_size: usize,
         cache_size: NonZeroUsize,
         max_disk_space: Option<u64>,
+        flush_interval_ms: u64,
     ) -> Result<Self> {
         // Open or create the file
         let file = OpenOptions::new()
@@ -346,6 +349,7 @@ impl StorageManager {
             dirty_pages: RwLock::new(HashSet::new()),
             flush_running: AtomicBool::new(true),
             flush_threshold: DEFAULT_FLUSH_THRESHOLD,
+            flush_interval_ms,
         };
 
         // Start the background flush task
@@ -384,9 +388,10 @@ impl StorageManager {
 
         // In a real implementation, we would do something like this:
         // let storage_clone = self.clone();
+        // let interval_ms = self.flush_interval_ms; // Use the configured interval
         // std::thread::spawn(move || {
         //     while storage_clone.flush_running.load(Ordering::SeqCst) {
-        //         std::thread::sleep(Duration::from_millis(1000)); // 1 second interval
+        //         std::thread::sleep(std::time::Duration::from_millis(interval_ms));
         //         storage_clone.flush_dirty_pages_if_needed();
         //     }
         // });
@@ -400,7 +405,16 @@ impl StorageManager {
     /// Flush dirty pages if needed based on threshold
     pub fn flush_dirty_pages_if_needed(&self) -> Result<()> {
         let dirty_count = self.dirty_pages.read().len();
+
+        // Use both the flush threshold and the interval (via should_flush_now)
+        // to determine when to flush
         if dirty_count >= self.flush_threshold || self.should_flush_now() {
+            // Log the flush interval for debugging purposes
+            if log::log_enabled!(log::Level::Debug) {
+                log::debug!("Flushing {} dirty pages (threshold: {}, interval: {}ms)",
+                    dirty_count, self.flush_threshold, self.flush_interval_ms);
+            }
+
             self.flush_dirty_pages()
         } else {
             Ok(())
@@ -925,6 +939,7 @@ mod tests {
             DEFAULT_PAGE_SIZE,
             NonZeroUsize::new(10).unwrap(),
             None,
+            1000, // 1 second flush interval
         )
         .unwrap();
 
@@ -977,6 +992,7 @@ mod tests {
             DEFAULT_PAGE_SIZE,
             NonZeroUsize::new(10).unwrap(),
             None,
+            1000, // 1 second flush interval
         )
         .unwrap();
 

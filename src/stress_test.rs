@@ -32,6 +32,7 @@ mod tests {
             page_size: DEFAULT_PAGE_SIZE,
             cache_size: NonZeroUsize::new(10000).unwrap(), // Larger cache for stress test
             max_disk_space: None, // Unlimited for stress test
+            flush_interval_ms: 1000, // 1 second flush interval
         };
 
         let server = Server::with_config(config).await.unwrap();
@@ -225,6 +226,7 @@ mod tests {
                 page_size: DEFAULT_PAGE_SIZE,
                 cache_size: NonZeroUsize::new(10000).unwrap(), // Larger cache for stress test
                 max_disk_space: None, // Unlimited for stress test
+                flush_interval_ms: 1000, // 1 second flush interval
             };
 
             // First server instance

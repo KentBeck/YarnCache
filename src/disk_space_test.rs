@@ -25,6 +25,7 @@ mod tests {
                 page_size: DEFAULT_PAGE_SIZE,
                 cache_size: NonZeroUsize::new(10).unwrap(),
                 max_disk_space: Some(1024), // 1KB limit
+                flush_interval_ms: 1000, // 1 second flush interval
             };
 
             let server = Server::with_config(config).await.unwrap();
@@ -86,6 +87,7 @@ mod tests {
                 page_size: DEFAULT_PAGE_SIZE,
                 cache_size: NonZeroUsize::new(10).unwrap(),
                 max_disk_space: Some(1024), // 1KB limit
+                flush_interval_ms: 1000, // 1 second flush interval
             };
 
             let server = Server::with_config(config).await.unwrap();
@@ -140,6 +142,7 @@ mod tests {
                 page_size: DEFAULT_PAGE_SIZE,
                 cache_size: NonZeroUsize::new(10).unwrap(),
                 max_disk_space: None, // Unlimited
+                flush_interval_ms: 1000, // 1 second flush interval
             };
 
             let server = Server::with_config(config).await.unwrap();

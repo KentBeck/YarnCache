@@ -13,6 +13,9 @@ use crate::Result;
 /// Default cache size (number of pages)
 const DEFAULT_CACHE_SIZE: usize = 1000;
 
+/// Default flush interval in milliseconds (1 second)
+const DEFAULT_FLUSH_INTERVAL_MS: u64 = 1000;
+
 /// Server configuration
 #[derive(Debug, Clone)]
 pub struct ServerConfig {
@@ -24,6 +27,8 @@ pub struct ServerConfig {
     pub cache_size: NonZeroUsize,
     /// Maximum disk space in bytes (None for unlimited)
     pub max_disk_space: Option<u64>,
+    /// Flush interval in milliseconds (how often to check for dirty pages)
+    pub flush_interval_ms: u64,
 }
 
 impl Default for ServerConfig {
@@ -33,6 +38,7 @@ impl Default for ServerConfig {
             page_size: DEFAULT_PAGE_SIZE,
             cache_size: NonZeroUsize::new(DEFAULT_CACHE_SIZE).unwrap(),
             max_disk_space: None, // Unlimited by default
+            flush_interval_ms: DEFAULT_FLUSH_INTERVAL_MS,
         }
     }
 }
@@ -70,6 +76,7 @@ impl Server {
             config.page_size,
             config.cache_size,
             config.max_disk_space,
+            config.flush_interval_ms,
         )?);
 
         // Create the shutdown channel
@@ -154,6 +161,7 @@ mod tests {
             page_size: DEFAULT_PAGE_SIZE,
             cache_size: NonZeroUsize::new(10).unwrap(),
             max_disk_space: None, // Unlimited for tests
+            flush_interval_ms: 1000, // 1 second flush interval
         };
 
         // Create a server
